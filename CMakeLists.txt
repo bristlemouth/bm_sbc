@@ -34,6 +34,10 @@ set(BM_SBC_PLATFORM_INCLUDES
 setup_bm_ip_stack(LINUX "${BM_SBC_PLATFORM_INCLUDES}")
 setup_bm_os(POSIX "${BM_SBC_PLATFORM_INCLUDES}")
 
+# Build bm_core in hosted (non-embedded) mode — skips ADIN2111 driver,
+# guards ELF-specific attributes, etc.
+set(BM_HOSTED ON CACHE BOOL "Build bm_core for hosted environment (Linux/macOS)")
+
 add_subdirectory(${BM_CORE_DIR})
 
 # ---------------------------------------------------------------------------
