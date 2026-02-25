@@ -86,6 +86,64 @@
 /// Format: "<socket_dir>/bm_sbc_<node_id as 16 lowercase hex digits>.sock"
 #define VIRTUAL_PORT_SOCK_FMT "%s/bm_sbc_%016" PRIx64 ".sock"
 
+// -------------------------------------------------------------------------
+// Wire-format constants
+//
+// Datagram layout: [port (1 B)] [L2 Ethernet frame (14–1514 B)]
+// -------------------------------------------------------------------------
+
+/// Byte offset of the port field within a datagram.
+#define VIRTUAL_PORT_DGRAM_PORT_OFF  0
+
+/// Byte offset of the L2 Ethernet frame within a datagram.
+#define VIRTUAL_PORT_DGRAM_FRAME_OFF 1
+
+/// Size of the datagram header (the single port byte).
+#define VIRTUAL_PORT_DGRAM_HDR_LEN   1
+
+/// Ethernet header length (6-byte dst MAC + 6-byte src MAC + 2-byte ethertype).
+/// Matches the sum of ethernet_destination_size_bytes + ethernet_src_size_bytes
+/// + ethernet_type_size_bytes defined in bm_core/network/l2.c.
+#define VIRTUAL_PORT_ETH_HDR_LEN     14
+
+/// IPv6 MTU (maximum IP payload size per Ethernet frame).
+/// Matches ethernet_mtu in bm_core/network/bm_lwip.c.
+#define VIRTUAL_PORT_ETH_MTU         1500
+
+/// Maximum L2 frame length passed through the software stack.
+/// FCS (4 bytes) is added/stripped by hardware and is never present here.
+#define VIRTUAL_PORT_MAX_FRAME_LEN   (VIRTUAL_PORT_ETH_HDR_LEN + VIRTUAL_PORT_ETH_MTU)
+
+/// Minimum valid L2 frame length (Ethernet header with no payload).
+#define VIRTUAL_PORT_MIN_FRAME_LEN   VIRTUAL_PORT_ETH_HDR_LEN
+
+/// Maximum total datagram length: port byte + max frame.
+/// Both Linux and macOS default socket buffers greatly exceed this value.
+#define VIRTUAL_PORT_MAX_DGRAM_LEN   (VIRTUAL_PORT_DGRAM_HDR_LEN + VIRTUAL_PORT_MAX_FRAME_LEN)
+
+/// Minimum total datagram length: port byte + min frame.
+#define VIRTUAL_PORT_MIN_DGRAM_LEN   (VIRTUAL_PORT_DGRAM_HDR_LEN + VIRTUAL_PORT_MIN_FRAME_LEN)
+
+// -------------------------------------------------------------------------
+// Wire-format accessor macros
+// -------------------------------------------------------------------------
+
+/// Extract the ingress port number from a received datagram buffer @p buf.
+#define VIRTUAL_PORT_DGRAM_PORT(buf) \
+    ((uint8_t)(((const uint8_t *)(buf))[VIRTUAL_PORT_DGRAM_PORT_OFF]))
+
+/// Get a pointer to the start of the L2 frame inside datagram buffer @p buf.
+#define VIRTUAL_PORT_DGRAM_FRAME_PTR(buf) \
+    ((uint8_t *)(buf) + VIRTUAL_PORT_DGRAM_FRAME_OFF)
+
+/// Compute the L2 frame length from the total received datagram length.
+#define VIRTUAL_PORT_FRAME_LEN(dgram_len) \
+    ((dgram_len) - VIRTUAL_PORT_DGRAM_HDR_LEN)
+
+/// Compute the total datagram length to allocate given an L2 @p frame_len.
+#define VIRTUAL_PORT_DGRAM_LEN(frame_len) \
+    ((frame_len) + VIRTUAL_PORT_DGRAM_HDR_LEN)
+
 /// Initialize the virtual-port network device.
 /// @return 0 on success, non-zero on failure
 int virtual_port_device_init(void);
