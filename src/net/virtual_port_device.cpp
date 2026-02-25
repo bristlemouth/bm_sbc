@@ -16,11 +16,14 @@
 // TODO (task 2g): 15-neighbor cap — reject with log + counter if table full.
 // TODO (task 2h): retry_negotiation() — reconnect if peer socket path exists.
 // TODO (task 2i): port_stats() / handle_interrupt() — safe no-op stubs.
-// TODO (task 2j): virtual_port_device_get(node_id, peer_ids, num_peers)
-//                 → NetworkDevice with trait + callbacks wired up.
+// TODO (task 2j): virtual_port_device_get(cfg)
+//                 → copy cfg into static state, wire up trait + callbacks,
+//                   return populated NetworkDevice.
 
-int virtual_port_device_init(void) {
-  // Placeholder – will be implemented in task 2a–2j.
-  return 0;
+NetworkDevice virtual_port_device_get(const VirtualPortCfg *cfg) {
+  // Placeholder – will be implemented in tasks 2a–2j.
+  (void)cfg;
+  NetworkDevice dev = {0};
+  return dev;
 }
 
