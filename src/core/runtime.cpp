@@ -97,14 +97,14 @@ int bm_sbc_runtime_init(int argc, char **argv) {
   memset(&dev_cfg, 0, sizeof(dev_cfg));
   dev_cfg.node_id        = vpc.own_node_id;
   dev_cfg.git_sha        = 0;
-  dev_cfg.device_name    = "bm_sbc";
-  dev_cfg.version_string = "0.1.0";
-  dev_cfg.vendor_id      = 0x0001;
-  dev_cfg.product_id     = 0x0001;
-  dev_cfg.hw_ver         = 1;
-  dev_cfg.ver_major      = 0;
-  dev_cfg.ver_minor      = 1;
-  dev_cfg.ver_patch      = 0;
+  dev_cfg.device_name    = BM_SBC_DEVICE_NAME;
+  dev_cfg.version_string = BM_SBC_VERSION_STRING;
+  dev_cfg.vendor_id      = BM_SBC_VENDOR_ID;
+  dev_cfg.product_id     = BM_SBC_PRODUCT_ID;
+  dev_cfg.hw_ver         = BM_SBC_HW_VER;
+  dev_cfg.ver_major      = BM_SBC_VERSION_MAJOR;
+  dev_cfg.ver_minor      = BM_SBC_VERSION_MINOR;
+  dev_cfg.ver_patch      = BM_SBC_VERSION_PATCH;
   device_init(dev_cfg);
 
   // --- Task 3c: VirtualPortDevice setup --------------------------------
