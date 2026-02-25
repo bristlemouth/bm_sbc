@@ -341,16 +341,17 @@ static BmErr vpd_send(void *self, uint8_t *data, size_t length, uint8_t port) {
 // -------------------------------------------------------------------------
 
 /// Re-open the send socket for a peer that was previously unreachable.
-/// @param port_index  0-based peer index (port_num - 1).
+/// @param port_num  1-based port number (same convention as enable_port/disable_port).
 /// @param renegotiated  set to true if a send socket is now open.
-static BmErr vpd_retry_negotiation(void *self, uint8_t port_index,
+static BmErr vpd_retry_negotiation(void *self, uint8_t port_num,
                                     bool *renegotiated) {
   VirtualPortState *s = (VirtualPortState *)self;
   if (renegotiated) { *renegotiated = false; }
-  if (port_index >= VIRTUAL_PORT_MAX_PEERS) { return BmEINVAL; }
+  if (port_num < 1 || port_num > VIRTUAL_PORT_MAX_PEERS) { return BmEINVAL; }
+  int idx = port_num - 1;
   pthread_mutex_lock(&s->lock);
-  PeerEntry *p = &s->peers[port_index];
-  if (!p->active) { pthread_mutex_unlock(&s->lock); return BmEINVAL; }
+  PeerEntry *p = &s->peers[idx];
+  if (!p->active) { pthread_mutex_unlock(&s->lock); return BmOK; } // no peer configured — not an error
   // Check whether the peer's receive socket path now exists on disk.
   if (access(p->sock_path, F_OK) != 0) {
     pthread_mutex_unlock(&s->lock);
