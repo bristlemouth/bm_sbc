@@ -1,5 +1,7 @@
 #include "runtime.h"
 #include "virtual_port_device.h"
+#include "gateway_device.h"
+#include "uart_l2_transport.h"
 #include "bm_config.h"
 // topology.h, bm_service.h, l2.h, pubsub.h have extern "C" guards.
 // device.h, bm_ip.h, bcmp.h, middleware.h do not — wrap them explicitly.
@@ -20,11 +22,14 @@ extern "C" {
 
 static const char *k_usage =
     "Usage: bm_sbc --node-id <hex64> [--peer <hex64>]... [--socket-dir <path>]\n"
+    "              [--uart <device>] [--baud <rate>]\n"
     "\n"
     "  --node-id    <hex64>   This node's 64-bit Bristlemouth node ID (required).\n"
     "  --peer       <hex64>   A peer node ID; repeat up to 16 times (optional).\n"
     "                         (16 peers triggers a truncation warning; 15 are used.)\n"
-    "  --socket-dir <path>    Unix socket directory (default: /tmp).\n";
+    "  --socket-dir <path>    Unix socket directory (default: /tmp).\n"
+    "  --uart       <device>  Serial device path for UART gateway mode.\n"
+    "  --baud       <rate>    Baud rate for UART (default: 115200).\n";
 
 int bm_sbc_runtime_init(int argc, char **argv) {
   // Make stdout line-buffered so every bm_debug/printf call ending in '\n'
@@ -38,11 +43,15 @@ int bm_sbc_runtime_init(int argc, char **argv) {
   strncpy(vpc.socket_dir, VIRTUAL_PORT_DEFAULT_SOCKET_DIR,
           sizeof(vpc.socket_dir) - 1);
   bool node_id_set = false;
+  char uart_path[128] = {0};
+  int baud_rate = 115200;
 
   static const struct option long_opts[] = {
       {"node-id",    required_argument, NULL, 'n'},
       {"peer",       required_argument, NULL, 'p'},
       {"socket-dir", required_argument, NULL, 's'},
+      {"uart",       required_argument, NULL, 'u'},
+      {"baud",       required_argument, NULL, 'b'},
       {NULL, 0, NULL, 0},
   };
 
@@ -81,6 +90,20 @@ int bm_sbc_runtime_init(int argc, char **argv) {
         strncpy(vpc.socket_dir, optarg, sizeof(vpc.socket_dir) - 1);
         break;
       }
+      case 'u': {
+        strncpy(uart_path, optarg, sizeof(uart_path) - 1);
+        break;
+      }
+      case 'b': {
+        char *end = NULL;
+        baud_rate = (int)strtol(optarg, &end, 10);
+        if (!end || *end != '\0' || baud_rate <= 0) {
+          fprintf(stderr, "bm_sbc: invalid --baud value: %s\n", optarg);
+          fprintf(stderr, "%s", k_usage);
+          return 1;
+        }
+        break;
+      }
       default: {
         fprintf(stderr, "bm_sbc: unrecognised option\n");
         fprintf(stderr, "%s", k_usage);
@@ -95,8 +118,10 @@ int bm_sbc_runtime_init(int argc, char **argv) {
     return 1;
   }
 
-  bm_debug("bm_sbc: node_id=0x%016" PRIx64 " peers=%u socket_dir=%s\n",
-           vpc.own_node_id, (unsigned)vpc.num_peers, vpc.socket_dir);
+  bool gateway_mode = (uart_path[0] != '\0');
+  bm_debug("bm_sbc: node_id=0x%016" PRIx64 " peers=%u socket_dir=%s%s%s\n",
+           vpc.own_node_id, (unsigned)vpc.num_peers, vpc.socket_dir,
+           gateway_mode ? " uart=" : "", gateway_mode ? uart_path : "");
 
   // --- Task 3b: device_init -------------------------------------------
   DeviceCfg dev_cfg;
@@ -114,14 +139,31 @@ int bm_sbc_runtime_init(int argc, char **argv) {
   device_init(dev_cfg);
 
   // --- Task 3c: VirtualPortDevice setup --------------------------------
-  NetworkDevice net_dev = virtual_port_device_get(&vpc);
+  NetworkDevice vpd_dev = virtual_port_device_get(&vpc);
+  NetworkDevice net_dev;
+
+  if (gateway_mode) {
+    // Gateway mode: composite device wrapping VPD + UART.
+    int uart_err = uart_l2_transport_init(uart_path, baud_rate,
+                                          gateway_uart_rx_cb,
+                                          nullptr);
+    if (uart_err != 0) {
+      fprintf(stderr, "bm_sbc: UART transport init failed\n");
+      return 1;
+    }
+    net_dev = gateway_device_get(&vpd_dev);
+  } else {
+    // Normal mode: VPD only.
+    net_dev = vpd_dev;
+  }
 
   // --- Task 3d: Bristlemouth startup sequence --------------------------
   BmErr err = BmOK;
   bm_err_check(err, bm_l2_init(net_dev));
   bm_err_check(err, bm_ip_init());
   bm_err_check(err, bcmp_init(net_dev));
-  bm_err_check(err, topology_init(VIRTUAL_PORT_MAX_PEERS));
+  uint8_t total_ports = net_dev.trait->num_ports();
+  bm_err_check(err, topology_init(total_ports));
   bm_err_check(err, bm_service_init());
   bm_err_check(err, bm_pubsub_init());
   bm_err_check(err, bm_middleware_init());

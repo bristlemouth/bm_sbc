@@ -48,6 +48,7 @@ add_library(bm_sbc_core STATIC
   src/core/app_runner.cpp
   src/platform/linux/platform_linux.cpp
   src/net/virtual_port_device.cpp
+  src/net/gateway_device.cpp
   src/transports/uart_l2/cobs.c
   src/transports/uart_l2/crc32c.c
   src/transports/uart_l2/frame_codec.c
