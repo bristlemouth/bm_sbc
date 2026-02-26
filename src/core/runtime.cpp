@@ -22,10 +22,16 @@ static const char *k_usage =
     "Usage: bm_sbc --node-id <hex64> [--peer <hex64>]... [--socket-dir <path>]\n"
     "\n"
     "  --node-id    <hex64>   This node's 64-bit Bristlemouth node ID (required).\n"
-    "  --peer       <hex64>   A peer node ID; repeat up to 15 times (optional).\n"
+    "  --peer       <hex64>   A peer node ID; repeat up to 16 times (optional).\n"
+    "                         (16 peers triggers a truncation warning; 15 are used.)\n"
     "  --socket-dir <path>    Unix socket directory (default: /tmp).\n";
 
 int bm_sbc_runtime_init(int argc, char **argv) {
+  // Make stdout line-buffered so every bm_debug/printf call ending in '\n'
+  // flushes immediately, even when output is redirected to a file.  Without
+  // this, ping-reply lines printed by the BCMP thread can be lost when the
+  // process is killed before the 8 KiB libc buffer fills up.
+  setvbuf(stdout, NULL, _IOLBF, 0);
   // --- Task 3a: CLI parsing -------------------------------------------
   VirtualPortCfg vpc;
   memset(&vpc, 0, sizeof(vpc));
@@ -55,10 +61,10 @@ int bm_sbc_runtime_init(int argc, char **argv) {
         break;
       }
       case 'p': {
-        if (vpc.num_peers >= VIRTUAL_PORT_MAX_PEERS) {
+        if (vpc.num_peers >= VIRTUAL_PORT_CFG_MAX_PEERS) {
           fprintf(stderr,
                   "bm_sbc: too many --peer flags (max %d); ignoring %s\n",
-                  VIRTUAL_PORT_MAX_PEERS, optarg);
+                  VIRTUAL_PORT_CFG_MAX_PEERS, optarg);
           break;
         }
         char *end = NULL;

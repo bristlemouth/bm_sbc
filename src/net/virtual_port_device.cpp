@@ -192,17 +192,13 @@ static BmErr vpd_enable(void *self) {
     return BmEIO;
   }
   s->enabled = true;
-
-  // Snapshot link_change before releasing lock.
-  void (*lc)(uint8_t, bool) = s->callbacks.link_change;
   pthread_mutex_unlock(&s->lock);
 
-  // Notify L2 that every configured peer port is now up.
-  if (lc) {
-    for (int i = 0; i < VIRTUAL_PORT_MAX_PEERS; i++) {
-      if (s->peers[i].active) { lc((uint8_t)i, true); }
-    }
-  }
+  // Do NOT call link_change here.  The L2 thread starts its renegotiation
+  // timers concurrently with this call, so firing link_change now would race
+  // with bm_l2_start_renegotiate_check (between ll_item_add and bm_timer_start).
+  // vpd_retry_negotiation() detects each peer and calls link_change once the
+  // 100 ms renegotiation timer fires — by which point the L2 thread is stable.
   return BmOK;
 }
 
@@ -358,16 +354,27 @@ static BmErr vpd_retry_negotiation(void *self, uint8_t port_num,
     return BmOK; // peer still unreachable
   }
   // (Re-)open the send socket if it is not already open.
+  bool newly_connected = false;
   if (p->send_fd < 0) {
     int sfd = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (sfd >= 0) {
       p->send_fd = sfd;
+      newly_connected = true;
       if (renegotiated) { *renegotiated = true; }
     }
   } else {
+    // Already open — still report as renegotiated so l2 can stop the timer.
+    newly_connected = true;
     if (renegotiated) { *renegotiated = true; }
   }
+  // Snapshot link_change under lock before releasing.
+  void (*lc)(uint8_t, bool) = s->callbacks.link_change;
   pthread_mutex_unlock(&s->lock);
+  // Fire link_change(idx, true) so l2 stops the renegotiation timer and sets
+  // the port as enabled in enabled_ports_mask.  This handles the race where
+  // the l2 thread starts the renegotiation timer AFTER vpd_enable() already
+  // fired link_change — in that case the timer would never stop without this.
+  if (newly_connected && lc) { lc((uint8_t)idx, true); }
   return BmOK;
 }
 
@@ -408,7 +415,7 @@ NetworkDevice virtual_port_device_get(const VirtualPortCfg *cfg) {
   // Task 2g: 15-neighbor cap.
   uint8_t num_peers = cfg->num_peers;
   if (num_peers > VIRTUAL_PORT_MAX_PEERS) {
-    bm_debug("vpd: peer count %u exceeds cap %d; truncating\n",
+    bm_debug("vpd: peer count %u exceeds cap %d\n",
              (unsigned)num_peers, VIRTUAL_PORT_MAX_PEERS);
     num_peers = VIRTUAL_PORT_MAX_PEERS;
   }
@@ -440,14 +447,13 @@ NetworkDevice virtual_port_device_get(const VirtualPortCfg *cfg) {
              cfg->peer_ids[i]);
   }
 
-  // Persistent callbacks storage — written through by bm_l2_init().
-  static NetworkDeviceCallbacks s_callbacks;
-  memset(&s_callbacks, 0, sizeof(s_callbacks));
-
+  // Point dev.callbacks directly at g_vport_state.callbacks so that when
+  // bm_l2_init writes network_device.callbacks->receive / ->link_change, those
+  // values are visible to the vpd trait functions that read s->callbacks.*.
   NetworkDevice dev;
   dev.self      = &g_vport_state;
   dev.trait     = &s_vpd_trait;
-  dev.callbacks = &s_callbacks;
+  dev.callbacks = &g_vport_state.callbacks;
   return dev;
 }
 

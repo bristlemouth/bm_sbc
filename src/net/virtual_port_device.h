@@ -82,6 +82,12 @@
 /// Maximum number of directly-connected peers per process.
 #define VIRTUAL_PORT_MAX_PEERS 15
 
+/// Maximum number of peer IDs that may be supplied in VirtualPortCfg.
+/// One extra slot beyond VIRTUAL_PORT_MAX_PEERS allows the caller to pass 16
+/// peer IDs so virtual_port_device_get() can detect the overflow and log the
+/// truncation warning ("vpd: peer count 16 exceeds cap 15") before clamping.
+#define VIRTUAL_PORT_CFG_MAX_PEERS (VIRTUAL_PORT_MAX_PEERS + 1)
+
 /// Size of a complete Unix-domain socket path buffer (Linux UNIX_PATH_MAX).
 /// sun_path is 104 bytes on macOS and 108 bytes on Linux; using 108 here.
 /// Callers that need strict portability should compare against the platform's
@@ -168,13 +174,15 @@
 //                           Required; fatal error if absent or malformed.
 //
 //   --peer       <hex64>    A peer's node ID (bare hex or 0x-prefixed).
-//                           Repeatable 0–VIRTUAL_PORT_MAX_PEERS times.
+//                           Repeatable 0–VIRTUAL_PORT_CFG_MAX_PEERS times.
 //                           Insertion order determines port-slot assignment:
 //                             1st --peer  →  virtual port 1
 //                             2nd --peer  →  virtual port 2
 //                             …
 //                             15th --peer →  virtual port 15
-//                           A 16th --peer is a fatal CLI error.
+//                           A 16th --peer triggers a truncation warning in
+//                           virtual_port_device_get() and is silently dropped.
+//                           A 17th or later --peer is rejected by the CLI.
 //
 //   --socket-dir <path>    Directory used for socket files.
 //                           Optional; defaults to VIRTUAL_PORT_DEFAULT_SOCKET_DIR.
@@ -200,7 +208,9 @@ typedef struct {
 
   /// Peer node IDs in port-slot order (from --peer flags, in order given).
   /// peer_ids[0] → virtual port 1, peer_ids[1] → virtual port 2, …
-  uint64_t peer_ids[VIRTUAL_PORT_MAX_PEERS];
+  /// Array has VIRTUAL_PORT_CFG_MAX_PEERS slots so a 16th entry can be passed
+  /// through to virtual_port_device_get() for the truncation-warning path.
+  uint64_t peer_ids[VIRTUAL_PORT_CFG_MAX_PEERS];
 
   /// Number of valid entries in peer_ids[].  0–VIRTUAL_PORT_MAX_PEERS.
   uint8_t num_peers;
