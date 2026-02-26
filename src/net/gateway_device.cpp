@@ -10,7 +10,9 @@
 // ---------------------------------------------------------------------------
 
 /// The gateway wraps an existing VPD device and adds a UART port.
-/// VPD owns ports 1..vpd_num_ports, UART is vpd_num_ports + 1.
+/// The BM protocol encodes port numbers in a 4-bit nibble (max 15),
+/// so the total port count must not exceed 15.
+/// VPD owns ports 1..vpd_ports, UART is vpd_ports + 1 (== 15).
 static struct {
   NetworkDevice *vpd;           ///< Underlying VirtualPortDevice.
   uint8_t vpd_ports;            ///< Number of VPD ports (cached).
@@ -21,6 +23,10 @@ static struct {
 // ---------------------------------------------------------------------------
 // Trait implementation
 // ---------------------------------------------------------------------------
+
+/// Maximum total ports (constrained by the 4-bit port nibble in the BM L2
+/// protocol).  VPD gets max_total_ports - 1, UART gets the last slot.
+static const uint8_t max_total_ports = 15;
 
 static uint8_t gw_num_ports(void) {
   return s_gw.vpd_ports + 1; // VPD ports + 1 UART port
@@ -61,8 +67,10 @@ static BmErr gw_enable(void *self) {
   BmErr err = s_gw.vpd->trait->enable(s_gw.vpd->self);
   if (err == BmOK) {
     // Signal link-up for the UART port.
+    // link_change expects a 0-based port index; uart_port is 1-based,
+    // so pass uart_port - 1.
     if (s_gw.cbs.link_change) {
-      s_gw.cbs.link_change(s_gw.uart_port, true);
+      s_gw.cbs.link_change(s_gw.uart_port - 1, true);
     }
   }
   return err;
@@ -71,7 +79,7 @@ static BmErr gw_enable(void *self) {
 static BmErr gw_disable(void *self) {
   (void)self;
   if (s_gw.cbs.link_change) {
-    s_gw.cbs.link_change(s_gw.uart_port, false);
+    s_gw.cbs.link_change(s_gw.uart_port - 1, false);
   }
   uart_l2_transport_deinit();
   return s_gw.vpd->trait->disable(s_gw.vpd->self);
@@ -148,7 +156,11 @@ static const NetworkDeviceTrait s_gw_trait = {
 
 NetworkDevice gateway_device_get(NetworkDevice *vpd_dev) {
   s_gw.vpd = vpd_dev;
-  s_gw.vpd_ports = vpd_dev->trait->num_ports();
+  // Cap VPD ports so total (VPD + 1 UART) fits in a 4-bit port number.
+  uint8_t raw_vpd_ports = vpd_dev->trait->num_ports();
+  s_gw.vpd_ports = (raw_vpd_ports >= max_total_ports)
+                        ? (uint8_t)(max_total_ports - 1)
+                        : raw_vpd_ports;
   s_gw.uart_port = s_gw.vpd_ports + 1;
   memset(&s_gw.cbs, 0, sizeof(s_gw.cbs));
 
