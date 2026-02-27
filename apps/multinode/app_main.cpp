@@ -15,6 +15,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 // Headers without C++ guards must be wrapped so their symbols have C linkage.
 // util.h is included here first so its include guard fires before
@@ -35,14 +36,15 @@ extern "C" {
 
 static const char    *k_topic        = "bm_sbc/test";
 static const char    *k_payload      = "hello_from_multinode";
-static const int      k_delay_loops  = 3000; // ~3 s at 1 ms/loop
+static const double   k_delay_sec    = 3.0; // wall-clock seconds before action
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
-static int  s_loop_count   = 0;
-static bool s_actions_done = false;
+static bool            s_start_recorded = false;
+static struct timespec s_start_time;
+static bool            s_actions_done   = false;
 
 // ---------------------------------------------------------------------------
 // Callbacks
@@ -81,7 +83,20 @@ void setup(void) {
 
 void loop(void) {
   if (s_actions_done) { return; }
-  if (++s_loop_count < k_delay_loops) { return; }
+
+  // Use wall-clock time for the startup delay so the timing is correct
+  // regardless of nanosleep resolution (which varies across platforms).
+  if (!s_start_recorded) {
+    clock_gettime(CLOCK_MONOTONIC, &s_start_time);
+    s_start_recorded = true;
+    return;
+  }
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  double elapsed = (now.tv_sec - s_start_time.tv_sec)
+                 + (now.tv_nsec - s_start_time.tv_nsec) / 1e9;
+  if (elapsed < k_delay_sec) { return; }
+
   s_actions_done = true;
 
   // Send a multicast ping — bm_core handles the echo request/reply cycle and
