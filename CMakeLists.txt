@@ -88,7 +88,18 @@ function(build_app APP_NAME)
     src/core/main.cpp
     ${APP_SOURCES}
   )
-  target_link_libraries(${APP_TARGET} PRIVATE bm_sbc_core)
+
+  # bm_sbc_core contains platform stubs (platform_linux.cpp)
+  # that bmcore/bcmp references.
+  # GNU ld (Linux) is single-pass, so those object files are
+  # silently dropped unless something already references them.
+  # Force the whole archive on Linux to break the circular dependency.
+  # macOS's linker is multi-pass and handles this automatically.
+  target_link_libraries(${APP_TARGET} PRIVATE
+    "$<$<PLATFORM_ID:Linux>:-Wl,--push-state,--whole-archive>"
+    bm_sbc_core
+    "$<$<PLATFORM_ID:Linux>:-Wl,--pop-state>"
+  )
   target_include_directories(${APP_TARGET} PRIVATE ${APP_DIR})
 endfunction()
 
