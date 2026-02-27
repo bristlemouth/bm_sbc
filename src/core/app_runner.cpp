@@ -1,6 +1,6 @@
 #include "app_runner.h"
 
-#include <unistd.h> // usleep
+#include <time.h>
 
 void bm_sbc_app_run(void) {
   setup();
@@ -8,7 +8,7 @@ void bm_sbc_app_run(void) {
   // TODO: Replace with a proper scheduler-friendly cadence.
   for (;;) {
     loop();
-    usleep(1000); // 1 ms yield
+    struct timespec delay = {0, 1000000L}; // 1 ms yield
+    nanosleep(&delay, NULL);
   }
 }
-
