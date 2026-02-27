@@ -126,3 +126,19 @@ else()
   endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+enable_testing()
+
+add_executable(test_frame_codec
+  tests/test_frame_codec.c
+  src/transports/uart_l2/cobs.c
+  src/transports/uart_l2/crc32c.c
+  src/transports/uart_l2/frame_codec.c
+)
+target_include_directories(test_frame_codec PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/transports/uart_l2
+)
+add_test(NAME frame_codec COMMAND test_frame_codec)
+
