@@ -14,10 +14,10 @@
 /// so the total port count must not exceed 15.
 /// VPD owns ports 1..vpd_ports, UART is vpd_ports + 1 (== 15).
 static struct {
-  NetworkDevice *vpd;           ///< Underlying VirtualPortDevice.
-  uint8_t vpd_ports;            ///< Number of VPD ports (cached).
-  uint8_t uart_port;            ///< Port number for the UART link.
-  NetworkDeviceCallbacks cbs;   ///< Callbacks (receive, link_change, etc.)
+  NetworkDevice vpd;          ///< Underlying VirtualPortDevice.
+  uint8_t vpd_ports;          ///< Number of VPD ports (cached).
+  uint8_t uart_port;          ///< Port number for the UART link.
+  NetworkDeviceCallbacks cbs; ///< Callbacks (receive, link_change, etc.)
 } s_gw;
 
 // ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ static BmErr gw_send(void *self, uint8_t *data, size_t length, uint8_t port) {
 
   if (port == 0) {
     // Flood: send on all VPD ports + UART.
-    BmErr vpd_err = s_gw.vpd->trait->send(s_gw.vpd->self, data, length, 0);
+    BmErr vpd_err = s_gw.vpd.trait->send(s_gw.vpd.self, data, length, 0);
     int uart_err = uart_l2_send(data, length);
     // Return error only if both failed.
     if (vpd_err != BmOK && uart_err != 0) {
@@ -50,7 +50,7 @@ static BmErr gw_send(void *self, uint8_t *data, size_t length, uint8_t port) {
 
   if (port >= 1 && port <= s_gw.vpd_ports) {
     // Delegate to VPD.
-    return s_gw.vpd->trait->send(s_gw.vpd->self, data, length, port);
+    return s_gw.vpd.trait->send(s_gw.vpd.self, data, length, port);
   }
 
   if (port == s_gw.uart_port) {
@@ -64,7 +64,7 @@ static BmErr gw_send(void *self, uint8_t *data, size_t length, uint8_t port) {
 static BmErr gw_enable(void *self) {
   (void)self;
   // Enable the VPD; UART is already running (started in transport_init).
-  BmErr err = s_gw.vpd->trait->enable(s_gw.vpd->self);
+  BmErr err = s_gw.vpd.trait->enable(s_gw.vpd.self);
   if (err == BmOK) {
     // Signal link-up for the UART port.
     // link_change expects a 0-based port index; uart_port is 1-based,
@@ -82,13 +82,13 @@ static BmErr gw_disable(void *self) {
     s_gw.cbs.link_change(s_gw.uart_port - 1, false);
   }
   uart_l2_transport_deinit();
-  return s_gw.vpd->trait->disable(s_gw.vpd->self);
+  return s_gw.vpd.trait->disable(s_gw.vpd.self);
 }
 
 static BmErr gw_enable_port(void *self, uint8_t port_num) {
   (void)self;
   if (port_num >= 1 && port_num <= s_gw.vpd_ports) {
-    return s_gw.vpd->trait->enable_port(s_gw.vpd->self, port_num);
+    return s_gw.vpd.trait->enable_port(s_gw.vpd.self, port_num);
   }
   if (port_num == s_gw.uart_port) {
     return BmOK; // UART is always enabled once transport_init succeeds.
@@ -99,7 +99,7 @@ static BmErr gw_enable_port(void *self, uint8_t port_num) {
 static BmErr gw_disable_port(void *self, uint8_t port_num) {
   (void)self;
   if (port_num >= 1 && port_num <= s_gw.vpd_ports) {
-    return s_gw.vpd->trait->disable_port(s_gw.vpd->self, port_num);
+    return s_gw.vpd.trait->disable_port(s_gw.vpd.self, port_num);
   }
   if (port_num == s_gw.uart_port) {
     return BmOK; // No-op for UART port.
@@ -108,28 +108,30 @@ static BmErr gw_disable_port(void *self, uint8_t port_num) {
 }
 
 static BmErr gw_retry_negotiation(void *self, uint8_t port_index,
-                                   bool *renegotiated) {
+                                  bool *renegotiated) {
   (void)self;
   if (port_index < s_gw.vpd_ports) {
-    return s_gw.vpd->trait->retry_negotiation(s_gw.vpd->self, port_index,
-                                               renegotiated);
+    return s_gw.vpd.trait->retry_negotiation(s_gw.vpd.self, port_index,
+                                             renegotiated);
   }
   // UART port: no negotiation needed.
-  if (renegotiated) { *renegotiated = false; }
+  if (renegotiated) {
+    *renegotiated = false;
+  }
   return BmOK;
 }
 
 static BmErr gw_port_stats(void *self, uint8_t port_index, void *stats) {
   (void)self;
   if (port_index < s_gw.vpd_ports) {
-    return s_gw.vpd->trait->port_stats(s_gw.vpd->self, port_index, stats);
+    return s_gw.vpd.trait->port_stats(s_gw.vpd.self, port_index, stats);
   }
   return BmOK;
 }
 
 static BmErr gw_handle_interrupt(void *self) {
   (void)self;
-  return s_gw.vpd->trait->handle_interrupt(s_gw.vpd->self);
+  return s_gw.vpd.trait->handle_interrupt(s_gw.vpd.self);
 }
 
 // ---------------------------------------------------------------------------
@@ -137,36 +139,28 @@ static BmErr gw_handle_interrupt(void *self) {
 // ---------------------------------------------------------------------------
 
 static const NetworkDeviceTrait s_gw_trait = {
-  gw_send,
-  gw_enable,
-  gw_disable,
-  gw_enable_port,
-  gw_disable_port,
-  gw_retry_negotiation,
-  gw_num_ports,
-  gw_port_stats,
-  gw_handle_interrupt,
+    gw_send,        gw_enable,       gw_disable,
+    gw_enable_port, gw_disable_port, gw_retry_negotiation,
+    gw_num_ports,   gw_port_stats,   gw_handle_interrupt,
 };
-
-
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 NetworkDevice gateway_device_get(NetworkDevice *vpd_dev) {
-  s_gw.vpd = vpd_dev;
+  s_gw.vpd = *vpd_dev; // copy by value — caller's local can go out of scope
   // Cap VPD ports so total (VPD + 1 UART) fits in a 4-bit port number.
-  uint8_t raw_vpd_ports = vpd_dev->trait->num_ports();
+  uint8_t raw_vpd_ports = s_gw.vpd.trait->num_ports();
   s_gw.vpd_ports = (raw_vpd_ports >= max_total_ports)
-                        ? (uint8_t)(max_total_ports - 1)
-                        : raw_vpd_ports;
+                       ? (uint8_t)(max_total_ports - 1)
+                       : raw_vpd_ports;
   s_gw.uart_port = s_gw.vpd_ports + 1;
   memset(&s_gw.cbs, 0, sizeof(s_gw.cbs));
 
   // Wire VPD callbacks through to ours so link_change/receive from VPD
   // peers still reaches the stack.
-  vpd_dev->callbacks = &s_gw.cbs;
+  s_gw.vpd.callbacks = &s_gw.cbs;
 
   NetworkDevice dev;
   dev.self = nullptr;

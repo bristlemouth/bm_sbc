@@ -22,8 +22,8 @@ extern "C" {
 /// transport (which must already be initialized via uart_l2_transport_init).
 ///
 /// @param vpd_dev  Pointer to an initialized VirtualPortDevice NetworkDevice.
-///                 The pointer must remain valid for the lifetime of the
-///                 gateway device (typically module-level static storage).
+///                 The struct is copied by value; the pointer need not remain
+///                 valid after this call returns.
 /// @return         A fully initialized composite NetworkDevice.
 NetworkDevice gateway_device_get(NetworkDevice *vpd_dev);
 
@@ -35,4 +35,3 @@ void gateway_uart_rx_cb(const uint8_t *frame, size_t len, void *ctx);
 #ifdef __cplusplus
 }
 #endif
-
