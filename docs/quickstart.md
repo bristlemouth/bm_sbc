@@ -11,14 +11,24 @@
 
 ## Build
 
+Using presets (recommended):
 ```
-cmake -B build -S . -DBM_SBC_BUILD_ALL_APPS=ON
-cmake --build build
+cmake --preset all && cmake --build --preset all
 ```
 
-Single app only:
+Or a single app:
 ```
-cmake -B build -S . -DBM_SBC_APP=example
+cmake --preset multinode && cmake --build --preset multinode
+```
+
+Available presets: `example`, `multinode`, `all`.
+
+Alternatively, use flags directly:
+```
+cmake -B build -S . -DBUILD_ALL_APPS=ON
+cmake --build build
+
+cmake -B build -S . -DAPP=example
 cmake --build build
 ```
 
@@ -62,10 +72,12 @@ void loop(void) {
 
 Build it:
 ```
-cmake -B build -S . -DBM_SBC_APP=myapp
+cmake -B build -S . -DAPP=myapp
 cmake --build build
 ./build/bm_sbc_myapp --node-id 0x0000000000000001
 ```
+
+Or add a preset to `CMakePresets.json` for your app and use `cmake --preset myapp`.
 
 The stack (neighbor discovery, BCMP, pub/sub, middleware) is fully running
 before `setup()` is called. Use `bm_core` APIs directly:

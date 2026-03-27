@@ -9,8 +9,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
-set(BM_SBC_APP "" CACHE STRING "Name of a single app under apps/ to build")
-option(BM_SBC_BUILD_ALL_APPS "Build every app found under apps/" OFF)
+set(APP "" CACHE STRING "Name of a single app under apps/ to build")
+option(BUILD_ALL_APPS "Build every app found under apps/" OFF)
 
 # ---------------------------------------------------------------------------
 # bm_core integration (section 4 of PLAN.md)
@@ -104,38 +104,57 @@ function(build_app APP_NAME)
 endfunction()
 
 # --- Single-app mode ---
-if(BM_SBC_APP)
-  build_app(${BM_SBC_APP})
+if(APP)
+  build_app(${APP})
 
   # Convenience alias: the default node executable name.
-  add_executable(bm_sbc_node ALIAS bm_sbc_${BM_SBC_APP})
+  add_executable(bm_sbc_node ALIAS bm_sbc_${APP})
+
+  set(_BM_APP_SUMMARY "${APP}")
 
 # --- Build-all mode ---
-elseif(BM_SBC_BUILD_ALL_APPS)
+elseif(BUILD_ALL_APPS)
   file(GLOB APP_DIRS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/apps
        ${CMAKE_CURRENT_SOURCE_DIR}/apps/*)
+  set(_BM_APP_LIST "")
   foreach(APP_ENTRY ${APP_DIRS})
     if(IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/apps/${APP_ENTRY})
       build_app(${APP_ENTRY})
+      list(APPEND _BM_APP_LIST ${APP_ENTRY})
     endif()
   endforeach()
 
   # Default node target points to the first app alphabetically.
-  list(SORT APP_DIRS)
-  list(GET APP_DIRS 0 FIRST_APP)
+  list(SORT _BM_APP_LIST)
+  list(GET _BM_APP_LIST 0 FIRST_APP)
   add_executable(bm_sbc_node ALIAS bm_sbc_${FIRST_APP})
+
+  list(JOIN _BM_APP_LIST ", " _BM_APP_SUMMARY)
 
 # --- No app selected – build the example by default ---
 else()
   if(IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/apps/example)
     build_app(example)
     add_executable(bm_sbc_node ALIAS bm_sbc_example)
+    set(_BM_APP_SUMMARY "example (default)")
   else()
     message(STATUS
       "No app selected and no apps/example/ found. "
-      "Use -DBM_SBC_APP=<name> or -DBM_SBC_BUILD_ALL_APPS=ON.")
+      "Use -DAPP=<name> or -DBUILD_ALL_APPS=ON.")
+    set(_BM_APP_SUMMARY "NONE")
   endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# Build summary
+# ---------------------------------------------------------------------------
+message(STATUS "")
+message(STATUS "======================================")
+message(STATUS "  bm_sbc app(s): ${_BM_APP_SUMMARY}")
+if(NOT APP AND NOT BUILD_ALL_APPS)
+  message(STATUS "  Tip: use -DAPP=<name> or -DBUILD_ALL_APPS=ON")
+endif()
+message(STATUS "======================================")
 
 # ---------------------------------------------------------------------------
 # Tests

@@ -70,9 +70,9 @@ Each app remains small (Arduino-like), while stack logic lives in shared core:
 
 Build selection:
 
-- `-DBM_SBC_APP=<app_name>` builds one app executable.
-- `-DBM_SBC_BUILD_ALL_APPS=ON` builds all in-tree apps.
-- Optional phase 2: `-DBM_SBC_APP_PATH=/abs/path/to/external/app`.
+- `-DAPP=<app_name>` builds one app executable.
+- `-DBUILD_ALL_APPS=ON` builds all in-tree apps.
+- Optional phase 2: `-DAPP_PATH=/abs/path/to/external/app`.
 
 ## 6. Local Networking Model (Per-Peer Virtual Ports)
 

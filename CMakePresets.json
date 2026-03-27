@@ -1,0 +1,43 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "example",
+      "displayName": "Example app",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "APP": "example"
+      }
+    },
+    {
+      "name": "multinode",
+      "displayName": "Multinode app",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "APP": "multinode"
+      }
+    },
+    {
+      "name": "all",
+      "displayName": "All apps",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "BUILD_ALL_APPS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "example",
+      "configurePreset": "example"
+    },
+    {
+      "name": "multinode",
+      "configurePreset": "multinode"
+    },
+    {
+      "name": "all",
+      "configurePreset": "all"
+    }
+  ]
+}
