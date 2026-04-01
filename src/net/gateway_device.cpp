@@ -17,7 +17,6 @@ static struct {
   NetworkDevice vpd;          ///< Underlying VirtualPortDevice.
   uint8_t vpd_ports;          ///< Number of VPD ports (cached).
   uint8_t uart_port;          ///< Port number for the UART link.
-  NetworkDeviceCallbacks cbs; ///< Callbacks (receive, link_change, etc.)
 } s_gw;
 
 // ---------------------------------------------------------------------------
@@ -69,8 +68,8 @@ static BmErr gw_enable(void *self) {
     // Signal link-up for the UART port.
     // link_change expects a 0-based port index; uart_port is 1-based,
     // so pass uart_port - 1.
-    if (s_gw.cbs.link_change) {
-      s_gw.cbs.link_change(s_gw.uart_port - 1, true);
+    if (s_gw.vpd.callbacks->link_change) {
+      s_gw.vpd.callbacks->link_change(s_gw.uart_port - 1, true);
     }
   }
   return err;
@@ -78,8 +77,8 @@ static BmErr gw_enable(void *self) {
 
 static BmErr gw_disable(void *self) {
   (void)self;
-  if (s_gw.cbs.link_change) {
-    s_gw.cbs.link_change(s_gw.uart_port - 1, false);
+  if (s_gw.vpd.callbacks->link_change) {
+    s_gw.vpd.callbacks->link_change(s_gw.uart_port - 1, false);
   }
   uart_l2_transport_deinit();
   return s_gw.vpd.trait->disable(s_gw.vpd.self);
@@ -156,24 +155,23 @@ NetworkDevice gateway_device_get(NetworkDevice *vpd_dev) {
                        ? (uint8_t)(max_total_ports - 1)
                        : raw_vpd_ports;
   s_gw.uart_port = s_gw.vpd_ports + 1;
-  memset(&s_gw.cbs, 0, sizeof(s_gw.cbs));
 
-  // Wire VPD callbacks through to ours so link_change/receive from VPD
-  // peers still reaches the stack.
-  s_gw.vpd.callbacks = &s_gw.cbs;
-
+  // Share the VPD's internal callbacks struct with the gateway device so
+  // that when bm_l2_init populates receive/link_change, those pointers
+  // are visible to VPD's RX thread and retry_negotiation (which read
+  // from their own module-level singleton, not from the device struct).
   NetworkDevice dev;
   dev.self = nullptr;
   dev.trait = &s_gw_trait;
-  dev.callbacks = &s_gw.cbs;
+  dev.callbacks = s_gw.vpd.callbacks;
   return dev;
 }
 
 void gateway_uart_rx_cb(const uint8_t *frame, size_t len, void *ctx) {
   (void)ctx;
-  if (s_gw.cbs.receive && len > 0) {
+  if (s_gw.vpd.callbacks->receive && len > 0) {
     // Deliver the UART frame to the stack as arriving on the UART port.
     // The receive callback expects a non-const pointer (legacy API).
-    s_gw.cbs.receive(s_gw.uart_port, (uint8_t *)frame, len);
+    s_gw.vpd.callbacks->receive(s_gw.uart_port, (uint8_t *)frame, len);
   }
 }
