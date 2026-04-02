@@ -7,7 +7,8 @@
 extern const char *bm_sbc_app_name_runtime;
 #define bm_app_name bm_sbc_app_name_runtime
 
-#define bm_debug(format, ...) printf(format, ##__VA_ARGS__)
+#include "bm_log.h"
+#define bm_debug(format, ...) bm_log_debug(format, ##__VA_ARGS__)
 
 // ---------------------------------------------------------------------------
 // Compile-time device identity constants used by device_init() in runtime.cpp.

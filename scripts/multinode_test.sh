@@ -39,7 +39,7 @@ check() {
 # start_node <log-file> [binary-args...]  — launches in background, prints PID
 start_node() {
   local log="$1"; shift
-  "$BINARY" "$@" >"$log" 2>&1 &
+  BM_SBC_LOG_STDOUT=1 BM_SBC_LOG_LEVEL=debug "$BINARY" --log-dir "$WORK/logs" "$@" >"$log" 2>&1 &
   echo $!
 }
 

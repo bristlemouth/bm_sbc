@@ -49,7 +49,7 @@ start_node() {
   local log="$1"; shift
   # Launch in its own process group to avoid stray SIGINT.
   perl -MPOSIX -e 'setpgrp(0,0); exec @ARGV' -- \
-    "$BINARY" "$@" >"$log" 2>&1 &
+    env BM_SBC_LOG_STDOUT=1 BM_SBC_LOG_LEVEL=debug "$BINARY" --log-dir "$WORK/logs" "$@" >"$log" 2>&1 &
   echo $!
 }
 

@@ -1,5 +1,6 @@
 #include "virtual_port_device.h"
 #include "bm_config.h"       // bm_debug()
+#include "bm_log.h"         // bm_log_warn()
 #include <errno.h>           // errno
 #include <pthread.h>         // pthread_mutex_t, pthread_t, pthread_create, pthread_join
 #include <stdio.h>           // snprintf
@@ -415,8 +416,8 @@ NetworkDevice virtual_port_device_get(const VirtualPortCfg *cfg) {
   // Task 2g: 15-neighbor cap.
   uint8_t num_peers = cfg->num_peers;
   if (num_peers > VIRTUAL_PORT_MAX_PEERS) {
-    bm_debug("vpd: peer count %u exceeds cap %d\n",
-             (unsigned)num_peers, VIRTUAL_PORT_MAX_PEERS);
+    bm_log_warn("vpd: peer count %u exceeds cap %d",
+                (unsigned)num_peers, VIRTUAL_PORT_MAX_PEERS);
     num_peers = VIRTUAL_PORT_MAX_PEERS;
   }
 

@@ -10,12 +10,14 @@
 ///   NEIGHBOR_UP   — emitted when a peer is discovered
 ///   NEIGHBOR_DOWN — emitted when a peer goes offline
 ///   PUBSUB_RX     — emitted when a pub/sub message arrives from a remote node
-///   🏓            — emitted by bm_core/bcmp/ping.c when a ping reply arrives
+///   bcmp_seq=     — emitted by bm_core/bcmp/ping.c when a ping reply arrives
 
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+
+#include "bm_log.h"
 
 // Headers without C++ guards must be wrapped so their symbols have C linkage.
 // util.h is included here first so its include guard fires before
@@ -51,23 +53,21 @@ static bool            s_actions_done   = false;
 // ---------------------------------------------------------------------------
 
 static void on_neighbor(bool discovered, BcmpNeighbor *neighbor) {
-  printf("[%016" PRIx64 "] NEIGHBOR_%s node=%016" PRIx64 " port=%u\n",
-         node_id(),
-         discovered ? "UP" : "DOWN",
-         neighbor->node_id,
-         (unsigned)neighbor->port);
-  fflush(stdout);
+  bm_log_info("[%016" PRIx64 "] NEIGHBOR_%s node=%016" PRIx64 " port=%u",
+              node_id(),
+              discovered ? "UP" : "DOWN",
+              neighbor->node_id,
+              (unsigned)neighbor->port);
 }
 
 static void on_pubsub(uint64_t src_node_id, const char *topic,
                       uint16_t topic_len, const uint8_t *data,
                       uint16_t data_len, uint8_t /*type*/, uint8_t /*version*/) {
-  printf("[%016" PRIx64 "] PUBSUB_RX from=%016" PRIx64
-         " topic=%.*s data=%.*s\n",
-         node_id(), src_node_id,
-         (int)topic_len, topic,
-         (int)data_len, reinterpret_cast<const char *>(data));
-  fflush(stdout);
+  bm_log_info("[%016" PRIx64 "] PUBSUB_RX from=%016" PRIx64
+              " topic=%.*s data=%.*s",
+              node_id(), src_node_id,
+              (int)topic_len, topic,
+              (int)data_len, reinterpret_cast<const char *>(data));
 }
 
 // ---------------------------------------------------------------------------
@@ -77,8 +77,7 @@ static void on_pubsub(uint64_t src_node_id, const char *topic,
 void setup(void) {
   bcmp_neighbor_register_discovery_callback(on_neighbor);
   bm_sub(k_topic, on_pubsub);
-  printf("[%016" PRIx64 "] multinode app: setup\n", node_id());
-  fflush(stdout);
+  bm_log_info("[%016" PRIx64 "] multinode app: setup", node_id());
 }
 
 void loop(void) {
@@ -100,7 +99,7 @@ void loop(void) {
   s_actions_done = true;
 
   // Send a multicast ping — bm_core handles the echo request/reply cycle and
-  // logs the reply line (🏓 ... bcmp_seq=...) via bm_debug/printf.
+  // logs the reply line (bcmp_seq=...) via bm_debug/printf.
   bcmp_send_ping_request(0, &multicast_global_addr, nullptr, 0);
 
   // Publish a test message on the shared topic.  Remote peers that subscribed
@@ -109,7 +108,5 @@ void loop(void) {
          static_cast<uint16_t>(strlen(k_payload)),
          0, BM_COMMON_PUB_SUB_VERSION);
 
-  printf("[%016" PRIx64 "] multinode app: ping + pub sent\n", node_id());
-  fflush(stdout);
+  bm_log_info("[%016" PRIx64 "] multinode app: ping + pub sent", node_id());
 }
-
