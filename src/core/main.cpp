@@ -1,4 +1,5 @@
 #include "app_runner.h"
+#include "bm_log.h"
 #include "runtime.h"
 
 #ifndef BM_SBC_APP_NAME
@@ -12,6 +13,7 @@ int main(int argc, char **argv) {
   }
 
   bm_sbc_app_run();
+  bm_log_shutdown();
   return 0;
 }
 

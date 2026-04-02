@@ -1,4 +1,5 @@
 #include "uart_l2_transport.h"
+#include "bm_log.h"
 #include "cobs.h"
 #include "frame_codec.h"
 
@@ -50,13 +51,13 @@ static speed_t baud_to_speed(int baud) {
 static int serial_open(const char *path, int baud) {
   speed_t speed = baud_to_speed(baud);
   if (speed == B0) {
-    fprintf(stderr, "uart_l2: unsupported baud rate %d\n", baud);
+    bm_log_error("uart_l2: unsupported baud rate %d", baud);
     return -1;
   }
 
   int fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (fd < 0) {
-    fprintf(stderr, "uart_l2: open(%s) failed: %s\n", path, strerror(errno));
+    bm_log_error("uart_l2: open(%s) failed: %s", path, strerror(errno));
     return -1;
   }
 
@@ -69,7 +70,7 @@ static int serial_open(const char *path, int baud) {
   struct termios tty;
   memset(&tty, 0, sizeof(tty));
   if (tcgetattr(fd, &tty) != 0) {
-    fprintf(stderr, "uart_l2: tcgetattr failed: %s\n", strerror(errno));
+    bm_log_error("uart_l2: tcgetattr failed: %s", strerror(errno));
     close(fd);
     return -1;
   }
@@ -97,7 +98,7 @@ static int serial_open(const char *path, int baud) {
   tty.c_cc[VTIME] = 1;
 
   if (tcsetattr(fd, TCSANOW, &tty) != 0) {
-    fprintf(stderr, "uart_l2: tcsetattr failed: %s\n", strerror(errno));
+    bm_log_error("uart_l2: tcsetattr failed: %s", strerror(errno));
     close(fd);
     return -1;
   }
@@ -129,7 +130,7 @@ static void *rx_thread_func(void *arg) {
         continue;
       }
       // Fatal read error — stop.
-      fprintf(stderr, "uart_l2: read error: %s\n", strerror(errno));
+      bm_log_error("uart_l2: read error: %s", strerror(errno));
       break;
     }
 
@@ -166,7 +167,7 @@ static void *rx_thread_func(void *arg) {
 int uart_l2_transport_init(const char *device_path, int baud_rate,
                            uart_l2_rx_cb rx_cb, void *rx_ctx) {
   if (s_fd >= 0) {
-    fprintf(stderr, "uart_l2: already initialized\n");
+    bm_log_warn("uart_l2: already initialized");
     return -1;
   }
 
@@ -180,7 +181,7 @@ int uart_l2_transport_init(const char *device_path, int baud_rate,
   s_rx_running = true;
 
   if (pthread_create(&s_rx_thread, nullptr, rx_thread_func, nullptr) != 0) {
-    fprintf(stderr, "uart_l2: pthread_create failed: %s\n", strerror(errno));
+    bm_log_error("uart_l2: pthread_create failed: %s", strerror(errno));
     close(s_fd);
     s_fd = -1;
     s_rx_running = false;
@@ -212,7 +213,7 @@ int uart_l2_send(const uint8_t *l2_frame, size_t l2_len) {
       if (errno == EINTR) {
         continue;
       }
-      fprintf(stderr, "uart_l2: write error: %s\n", strerror(errno));
+      bm_log_error("uart_l2: write error: %s", strerror(errno));
       result = -1;
       break;
     }

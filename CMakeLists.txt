@@ -64,6 +64,7 @@ add_custom_target(git_sha_header ALL
 # bm_sbc_core – shared stack runtime library (section 3.1)
 # ---------------------------------------------------------------------------
 add_library(bm_sbc_core STATIC
+  src/core/bm_log.c
   src/core/runtime.cpp
   src/core/app_runner.cpp
   src/core/pcap_file_sink.cpp

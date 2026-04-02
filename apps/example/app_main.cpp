@@ -3,13 +3,12 @@
 ///
 /// Demonstrates the setup()/loop() app contract.
 
-#include <cstdio>
+#include "bm_log.h"
 
 void setup(void) {
-  printf("example app: setup\n");
+  bm_log_info("example app: setup");
 }
 
 void loop(void) {
   // Placeholder – application logic goes here.
 }
-

@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include "bm_config.h"
+#include "bm_log.h"
 #include "gateway_device.h"
 #include "pcap_file_sink.h"
 #include "platform_linux.h"
@@ -26,6 +27,7 @@ extern "C" {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static const char *k_usage =
     "Usage: bm_sbc --init <toml> [options...]\n"
@@ -41,6 +43,11 @@ static const char *k_usage =
     "  --baud       <rate>    Baud rate for UART (default: 115200).\n"
     "  --pcap       <path>    Write captured L2 frames to a pcap file.\n"
     "\n"
+    "  --log-dir    <path>    Log file directory (default: /var/log/bm_sbc).\n"
+    "  --log-level  <level>   Minimum log level: "
+    "trace/debug/info/warn/error/fatal\n"
+    "                         (default: info).\n"
+    "  --log-stdout           Also write logs to stdout.\n"
     "CLI flags override values from the init file.\n";
 
 // App name passed in from main() (which is compiled per-app target and
@@ -174,6 +181,23 @@ static const char *read_device_name() {
   return buf;
 }
 
+/// Parse a log level name string to BmSbcLogLevel.  Returns -1 on failure.
+static int parse_log_level(const char *s) {
+  if (strcmp(s, "trace") == 0)
+    return BM_LOG_TRACE;
+  if (strcmp(s, "debug") == 0)
+    return BM_LOG_DEBUG;
+  if (strcmp(s, "info") == 0)
+    return BM_LOG_INFO;
+  if (strcmp(s, "warn") == 0)
+    return BM_LOG_WARN;
+  if (strcmp(s, "error") == 0)
+    return BM_LOG_ERROR;
+  if (strcmp(s, "fatal") == 0)
+    return BM_LOG_FATAL;
+  return -1;
+}
+
 int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   bm_sbc_app_name_runtime = app_name;
   // Make stdout line-buffered so every bm_debug/printf call ending in '\n'
@@ -192,16 +216,22 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   char pcap_path[256] = {0};
   int baud_rate = 115200;
   char init_path[512] = {0};
+  char log_dir[256] = {0};
+  int log_level = -1; // -1 = not set via CLI
+  bool log_stdout_flag = false;
 
   static const struct option long_opts[] = {
       {"init", required_argument, NULL, 'i'},
       {"node-id", required_argument, NULL, 'n'},
-      {"cfg-dir", required_argument, NULL, 'd'},
+      {"cfg-dir", required_argument, NULL, 'c'},
       {"peer", required_argument, NULL, 'p'},
       {"socket-dir", required_argument, NULL, 's'},
       {"uart", required_argument, NULL, 'u'},
       {"baud", required_argument, NULL, 'b'},
-      {"pcap", required_argument, NULL, 'c'},
+      {"pcap", required_argument, NULL, 'w'},
+      {"log-dir", required_argument, NULL, 'd'},
+      {"log-level", required_argument, NULL, 'l'},
+      {"log-stdout", no_argument, NULL, 'o'},
       {NULL, 0, NULL, 0},
   };
 
@@ -221,7 +251,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
       node_id_set = true;
       break;
     }
-    case 'd': {
+    case 'c': {
       strncpy(cfg_dir, optarg, sizeof(cfg_dir) - 1);
       break;
     }
@@ -258,8 +288,25 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
       }
       break;
     }
-    case 'c': {
+    case 'w': {
       strncpy(pcap_path, optarg, sizeof(pcap_path) - 1);
+      break;
+    }
+    case 'd': {
+      strncpy(log_dir, optarg, sizeof(log_dir) - 1);
+      break;
+    }
+    case 'l': {
+      log_level = parse_log_level(optarg);
+      if (log_level < 0) {
+        fprintf(stderr, "bm_sbc: invalid --log-level: %s\n", optarg);
+        fprintf(stderr, "%s", k_usage);
+        return 1;
+      }
+      break;
+    }
+    case 'o': {
+      log_stdout_flag = true;
       break;
     }
     default: {
@@ -343,12 +390,41 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     bm_debug("bm_sbc: cfg-dir=%s\n", cfg_dir);
   }
 
-  bool gateway_mode = (uart_path[0] != '\0');
-  bm_debug("bm_sbc: node_id=0x%016" PRIx64 " peers=%u socket_dir=%s%s%s\n",
-           vpc.own_node_id, (unsigned)vpc.num_peers, vpc.socket_dir,
-           gateway_mode ? " uart=" : "", gateway_mode ? uart_path : "");
+  // --- Logging init -------------------------------------------------------
+  // Environment variables override CLI flags.
+  const char *env_log_dir = getenv("BM_SBC_LOG_DIR");
+  if (env_log_dir) {
+    strncpy(log_dir, env_log_dir, sizeof(log_dir) - 1);
+  }
+  const char *env_log_level = getenv("BM_SBC_LOG_LEVEL");
+  if (env_log_level) {
+    int lvl = parse_log_level(env_log_level);
+    if (lvl >= 0) {
+      log_level = lvl;
+    }
+  }
+  const char *env_log_stdout = getenv("BM_SBC_LOG_STDOUT");
+  if (env_log_stdout && strcmp(env_log_stdout, "1") == 0) {
+    log_stdout_flag = true;
+  }
 
-  // --- device_init -------------------------------------------------------
+  // Default: also log to stdout when it is a TTY (interactive development).
+  bool also_stdout = log_stdout_flag || isatty(STDOUT_FILENO);
+
+  bm_log_init(app_name, vpc.own_node_id, log_dir[0] ? log_dir : NULL,
+              also_stdout);
+
+  if (log_level >= 0) {
+    bm_log_set_level((BmSbcLogLevel)log_level);
+  }
+
+  // --- First structured log line ------------------------------------------
+  bool gateway_mode = (uart_path[0] != '\0');
+  bm_log_info("node_id=0x%016" PRIx64 " peers=%u socket_dir=%s%s%s",
+              vpc.own_node_id, (unsigned)vpc.num_peers, vpc.socket_dir,
+              gateway_mode ? " uart=" : "", gateway_mode ? uart_path : "");
+
+  // --- device_init --------------------------------------------------------
   // Build the version string in the same format as bm_protocol embedded
   // apps: "app_name@version_tag" (e.g. "multinode@v0.1.0-3-g472aefb3").
   static char version_str_buf[128];
@@ -378,7 +454,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     int uart_err = uart_l2_transport_init(uart_path, baud_rate,
                                           gateway_uart_rx_cb, nullptr);
     if (uart_err != 0) {
-      fprintf(stderr, "bm_sbc: UART transport init failed\n");
+      bm_log_error("UART transport init failed");
       return 1;
     }
     net_dev = gateway_device_get(&vpd_dev);
@@ -393,11 +469,11 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
 
   if (pcap_path[0] != '\0') {
     if (pcap_file_sink_open(pcap_path) != 0) {
-      fprintf(stderr, "bm_sbc: failed to open pcap file: %s\n", pcap_path);
+      bm_log_error("failed to open pcap file: %s", pcap_path);
       return 1;
     }
     bm_l2_register_pcap_callback(pcap_write_packet);
-    bm_debug("bm_sbc: pcap capture → %s\n", pcap_path);
+    bm_log_info("pcap capture -> %s", pcap_path);
   }
 
   bm_err_check(err, bm_ip_init());
@@ -413,9 +489,9 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   config_cbor_map_service_init();
 
   if (err != BmOK) {
-    bm_debug("bm_sbc: startup sequence failed err=%d\n", (int)err);
+    bm_log_error("startup sequence failed err=%d", (int)err);
     return (int)err;
   }
-  bm_debug("bm_sbc: stack initialized\n");
+  bm_log_info("stack initialized");
   return 0;
 }
