@@ -66,6 +66,23 @@ static bool parse_hex64(const char *s, uint64_t *out) {
   return end && *end == '\0';
 }
 
+/// Parse a log level name string to BmSbcLogLevel.  Returns -1 on failure.
+static int parse_log_level(const char *s) {
+  if (strcmp(s, "trace") == 0)
+    return BM_LOG_TRACE;
+  if (strcmp(s, "debug") == 0)
+    return BM_LOG_DEBUG;
+  if (strcmp(s, "info") == 0)
+    return BM_LOG_INFO;
+  if (strcmp(s, "warn") == 0)
+    return BM_LOG_WARN;
+  if (strcmp(s, "error") == 0)
+    return BM_LOG_ERROR;
+  if (strcmp(s, "fatal") == 0)
+    return BM_LOG_FATAL;
+  return -1;
+}
+
 /// Load settings from a TOML init file.  Values are written into the
 /// provided output parameters only when present in the file — callers
 /// should pre-fill defaults before calling.
@@ -76,7 +93,9 @@ static bool parse_hex64(const char *s, uint64_t *out) {
 static int load_init_file(const char *path, VirtualPortCfg *vpc,
                           bool *node_id_set, char *cfg_dir, size_t cfg_dir_sz,
                           char *uart_path, size_t uart_path_sz, int *baud_rate,
-                          char *pcap_path, size_t pcap_path_sz) {
+                          char *pcap_path, size_t pcap_path_sz,
+                          char *log_dir, size_t log_dir_sz,
+                          int *log_level, bool *log_stdout) {
   toml_result_t res = toml_parse_file_ex(path);
   if (!res.ok) {
     fprintf(stderr, "bm_sbc: TOML parse error in %s: %s\n", path, res.errmsg);
@@ -149,6 +168,31 @@ static int load_init_file(const char *path, VirtualPortCfg *vpc,
     pcap_path[pcap_path_sz - 1] = '\0';
   }
 
+  // log-dir (string)
+  d = toml_get(root, "log-dir");
+  if (d.type == TOML_STRING) {
+    strncpy(log_dir, d.u.s, log_dir_sz - 1);
+    log_dir[log_dir_sz - 1] = '\0';
+  }
+
+  // log-level (string)
+  d = toml_get(root, "log-level");
+  if (d.type == TOML_STRING) {
+    int lvl = parse_log_level(d.u.s);
+    if (lvl < 0) {
+      fprintf(stderr, "bm_sbc: invalid log-level in %s: %s\n", path, d.u.s);
+      toml_free(res);
+      return 1;
+    }
+    *log_level = lvl;
+  }
+
+  // log-stdout (bool)
+  d = toml_get(root, "log-stdout");
+  if (d.type == TOML_BOOLEAN) {
+    *log_stdout = d.u.boolean;
+  }
+
   toml_free(res);
   return 0;
 }
@@ -181,23 +225,6 @@ static const char *read_device_name() {
   return buf;
 }
 
-/// Parse a log level name string to BmSbcLogLevel.  Returns -1 on failure.
-static int parse_log_level(const char *s) {
-  if (strcmp(s, "trace") == 0)
-    return BM_LOG_TRACE;
-  if (strcmp(s, "debug") == 0)
-    return BM_LOG_DEBUG;
-  if (strcmp(s, "info") == 0)
-    return BM_LOG_INFO;
-  if (strcmp(s, "warn") == 0)
-    return BM_LOG_WARN;
-  if (strcmp(s, "error") == 0)
-    return BM_LOG_ERROR;
-  if (strcmp(s, "fatal") == 0)
-    return BM_LOG_FATAL;
-  return -1;
-}
-
 int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   bm_sbc_app_name_runtime = app_name;
   // Make stdout line-buffered so every bm_debug/printf call ending in '\n'
@@ -217,8 +244,18 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   int baud_rate = 115200;
   char init_path[512] = {0};
   char log_dir[256] = {0};
-  int log_level = -1; // -1 = not set via CLI
+  int log_level = -1; // -1 = not set
   bool log_stdout_flag = false;
+
+  // Seed log vars from environment variables; CLI flags and TOML will override.
+  {
+    const char *env = getenv("BM_SBC_LOG_DIR");
+    if (env) strncpy(log_dir, env, sizeof(log_dir) - 1);
+    env = getenv("BM_SBC_LOG_LEVEL");
+    if (env) log_level = parse_log_level(env); // -1 if unrecognised
+    env = getenv("BM_SBC_LOG_STDOUT");
+    if (env && strcmp(env, "1") == 0) log_stdout_flag = true;
+  }
 
   static const struct option long_opts[] = {
       {"init", required_argument, NULL, 'i'},
@@ -334,6 +371,10 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     int cli_baud_rate = baud_rate;
     char cli_pcap_path[256];
     strncpy(cli_pcap_path, pcap_path, sizeof(cli_pcap_path));
+    char cli_log_dir[256];
+    strncpy(cli_log_dir, log_dir, sizeof(cli_log_dir));
+    int cli_log_level = log_level;
+    bool cli_log_stdout_flag = log_stdout_flag;
 
     // Reset to defaults before loading from file.
     memset(&vpc, 0, sizeof(vpc));
@@ -344,10 +385,15 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     memset(uart_path, 0, sizeof(uart_path));
     memset(pcap_path, 0, sizeof(pcap_path));
     baud_rate = 115200;
+    memset(log_dir, 0, sizeof(log_dir));
+    log_level = -1;
+    log_stdout_flag = false;
 
     int rc = load_init_file(init_path, &vpc, &node_id_set, cfg_dir,
                             sizeof(cfg_dir), uart_path, sizeof(uart_path),
-                            &baud_rate, pcap_path, sizeof(pcap_path));
+                            &baud_rate, pcap_path, sizeof(pcap_path),
+                            log_dir, sizeof(log_dir),
+                            &log_level, &log_stdout_flag);
     if (rc != 0) {
       return rc;
     }
@@ -376,6 +422,15 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     if (cli_pcap_path[0] != '\0') {
       strncpy(pcap_path, cli_pcap_path, sizeof(pcap_path) - 1);
     }
+    if (cli_log_dir[0] != '\0') {
+      strncpy(log_dir, cli_log_dir, sizeof(log_dir) - 1);
+    }
+    if (cli_log_level >= 0) {
+      log_level = cli_log_level;
+    }
+    if (cli_log_stdout_flag) {
+      log_stdout_flag = true;
+    }
   }
 
   if (!node_id_set) {
@@ -391,23 +446,6 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   }
 
   // --- Logging init -------------------------------------------------------
-  // Environment variables override CLI flags.
-  const char *env_log_dir = getenv("BM_SBC_LOG_DIR");
-  if (env_log_dir) {
-    strncpy(log_dir, env_log_dir, sizeof(log_dir) - 1);
-  }
-  const char *env_log_level = getenv("BM_SBC_LOG_LEVEL");
-  if (env_log_level) {
-    int lvl = parse_log_level(env_log_level);
-    if (lvl >= 0) {
-      log_level = lvl;
-    }
-  }
-  const char *env_log_stdout = getenv("BM_SBC_LOG_STDOUT");
-  if (env_log_stdout && strcmp(env_log_stdout, "1") == 0) {
-    log_stdout_flag = true;
-  }
-
   // Default: also log to stdout when it is a TTY (interactive development).
   bool also_stdout = log_stdout_flag || isatty(STDOUT_FILENO);
 

@@ -7,3 +7,8 @@ node-id    = "0x0000000000000002"
 cfg-dir    = "/tmp/bm_node2"
 socket-dir = "/tmp"
 peers      = ["0x0000000000000001"]
+
+# Logging (all optional; CLI flags override these values)
+# log-dir    = "/var/log/bm_sbc"  # default when omitted
+# log-level  = "info"             # trace/debug/info/warn/error/fatal
+# log-stdout = false              # true to also write logs to stdout
