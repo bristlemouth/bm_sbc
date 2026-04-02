@@ -136,12 +136,18 @@ int bm_sbc_runtime_init(int argc, char **argv) {
            gateway_mode ? " uart=" : "", gateway_mode ? uart_path : "");
 
   // --- Task 3b: device_init -------------------------------------------
+  // Build the version string in the same format as bm_protocol embedded
+  // apps: "app_name@version_tag" (e.g. "multinode@v0.1.0-3-g472aefb3").
+  static char version_str_buf[128];
+  snprintf(version_str_buf, sizeof(version_str_buf),
+           "%s@%s", bm_app_name, BM_SBC_VERSION_TAG);
+
   DeviceCfg dev_cfg;
   memset(&dev_cfg, 0, sizeof(dev_cfg));
   dev_cfg.node_id        = vpc.own_node_id;
   dev_cfg.git_sha        = BM_SBC_GIT_SHA;
   dev_cfg.device_name    = BM_SBC_DEVICE_NAME;
-  dev_cfg.version_string = BM_SBC_VERSION_STRING;
+  dev_cfg.version_string = version_str_buf;
   dev_cfg.vendor_id      = BM_SBC_VENDOR_ID;
   dev_cfg.product_id     = BM_SBC_PRODUCT_ID;
   dev_cfg.hw_ver         = BM_SBC_HW_VER;

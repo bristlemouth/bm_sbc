@@ -118,6 +118,7 @@ function(build_app APP_NAME)
     bm_sbc_core
     "$<$<PLATFORM_ID:Linux>:-Wl,--pop-state>"
   )
+  target_compile_definitions(${APP_TARGET} PRIVATE BM_SBC_APP_NAME="${APP_NAME}")
   target_include_directories(${APP_TARGET} PRIVATE ${APP_DIR})
 endfunction()
 
