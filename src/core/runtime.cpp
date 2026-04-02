@@ -16,6 +16,8 @@ extern "C" {
 #include "bcmp.h"
 #include "middleware.h"
 #include "pcap.h"
+#include "config_cbor_map_service.h"
+#include "sys_info_service.h"
 }
 #include <getopt.h>
 #include <stdio.h>
@@ -186,6 +188,10 @@ int bm_sbc_runtime_init(int argc, char **argv) {
   bm_err_check(err, bm_service_init());
   bm_err_check(err, bm_pubsub_init());
   bm_err_check(err, bm_middleware_init());
+
+  // Register built-in services so this node responds to service requests.
+  sys_info_service_init();
+  config_cbor_map_service_init();
 
   if (err != BmOK) {
     bm_debug("bm_sbc: startup sequence failed err=%d\n", (int)err);
