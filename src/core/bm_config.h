@@ -13,8 +13,8 @@
 #define BM_SBC_VERSION_MAJOR  0
 #define BM_SBC_VERSION_MINOR  1
 #define BM_SBC_VERSION_PATCH  0
-#define BM_SBC_VENDOR_ID      ((uint16_t)0x0001)
-#define BM_SBC_PRODUCT_ID     ((uint16_t)0x0001)
+#define BM_SBC_VENDOR_ID      ((uint16_t)0x0000)
+#define BM_SBC_PRODUCT_ID     ((uint16_t)0x0000)
 #define BM_SBC_HW_VER         ((uint8_t)1)
 
 #endif
