@@ -1,6 +1,7 @@
 #include "runtime.h"
 #include "virtual_port_device.h"
 #include "gateway_device.h"
+#include "pcap_file_sink.h"
 #include "uart_l2_transport.h"
 #include "bm_config.h"
 // topology.h, bm_service.h, l2.h, pubsub.h have extern "C" guards.
@@ -14,6 +15,7 @@ extern "C" {
 #include "bm_ip.h"
 #include "bcmp.h"
 #include "middleware.h"
+#include "pcap.h"
 }
 #include <getopt.h>
 #include <stdio.h>
@@ -22,14 +24,15 @@ extern "C" {
 
 static const char *k_usage =
     "Usage: bm_sbc --node-id <hex64> [--peer <hex64>]... [--socket-dir <path>]\n"
-    "              [--uart <device>] [--baud <rate>]\n"
+    "              [--uart <device>] [--baud <rate>] [--pcap <path>]\n"
     "\n"
     "  --node-id    <hex64>   This node's 64-bit Bristlemouth node ID (required).\n"
     "  --peer       <hex64>   A peer node ID; repeat up to 16 times (optional).\n"
     "                         (16 peers triggers a truncation warning; 15 are used.)\n"
     "  --socket-dir <path>    Unix socket directory (default: /tmp).\n"
     "  --uart       <device>  Serial device path for UART gateway mode.\n"
-    "  --baud       <rate>    Baud rate for UART (default: 115200).\n";
+    "  --baud       <rate>    Baud rate for UART (default: 115200).\n"
+    "  --pcap       <path>    Write captured L2 frames to a pcap file.\n";
 
 int bm_sbc_runtime_init(int argc, char **argv) {
   // Make stdout line-buffered so every bm_debug/printf call ending in '\n'
@@ -44,6 +47,7 @@ int bm_sbc_runtime_init(int argc, char **argv) {
           sizeof(vpc.socket_dir) - 1);
   bool node_id_set = false;
   char uart_path[128] = {0};
+  char pcap_path[256] = {0};
   int baud_rate = 115200;
 
   static const struct option long_opts[] = {
@@ -52,6 +56,7 @@ int bm_sbc_runtime_init(int argc, char **argv) {
       {"socket-dir", required_argument, NULL, 's'},
       {"uart",       required_argument, NULL, 'u'},
       {"baud",       required_argument, NULL, 'b'},
+      {"pcap",       required_argument, NULL, 'c'},
       {NULL, 0, NULL, 0},
   };
 
@@ -102,6 +107,10 @@ int bm_sbc_runtime_init(int argc, char **argv) {
           fprintf(stderr, "%s", k_usage);
           return 1;
         }
+        break;
+      }
+      case 'c': {
+        strncpy(pcap_path, optarg, sizeof(pcap_path) - 1);
         break;
       }
       default: {
@@ -160,6 +169,16 @@ int bm_sbc_runtime_init(int argc, char **argv) {
   // --- Task 3d: Bristlemouth startup sequence --------------------------
   BmErr err = BmOK;
   bm_err_check(err, bm_l2_init(net_dev));
+
+  if (pcap_path[0] != '\0') {
+    if (pcap_file_sink_open(pcap_path) != 0) {
+      fprintf(stderr, "bm_sbc: failed to open pcap file: %s\n", pcap_path);
+      return 1;
+    }
+    bm_l2_register_pcap_callback(pcap_write_packet);
+    bm_debug("bm_sbc: pcap capture → %s\n", pcap_path);
+  }
+
   bm_err_check(err, bm_ip_init());
   bm_err_check(err, bcmp_init(net_dev));
   uint8_t total_ports = net_dev.trait->num_ports();
