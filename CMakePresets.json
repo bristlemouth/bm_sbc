@@ -29,15 +29,18 @@
   "buildPresets": [
     {
       "name": "example",
-      "configurePreset": "example"
+      "configurePreset": "example",
+      "jobs": 4
     },
     {
       "name": "multinode",
-      "configurePreset": "multinode"
+      "configurePreset": "multinode",
+      "jobs": 4
     },
     {
       "name": "all",
-      "configurePreset": "all"
+      "configurePreset": "all",
+      "jobs": 4
     }
   ]
 }
