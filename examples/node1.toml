@@ -1,0 +1,9 @@
+# Example init file for a 2-node mesh: Node 1
+#
+# Usage:
+#   bm_sbc_multinode --init examples/node1.toml
+
+node-id    = "0x0000000000000001"
+cfg-dir    = "/tmp/bm_node1"
+socket-dir = "/tmp"
+peers      = ["0x0000000000000002"]

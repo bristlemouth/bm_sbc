@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 // bm_configs_generic.h, bm_rtc.h, bm_dfu_generic.h have no extern "C" guards.
@@ -15,28 +16,88 @@ extern "C" {
 int platform_linux_init(void) { return 0; }
 
 // ---------------------------------------------------------------------------
-// Config partition — in-memory no-ops (read zeros, writes accepted silently)
+// Config partition — file-backed persistence
 // ---------------------------------------------------------------------------
+
+static char s_cfg_paths[BM_CFG_PARTITION_COUNT][512];
+static bool s_cfg_dir_set = false;
+
+static const char *k_partition_filenames[BM_CFG_PARTITION_COUNT] = {
+    "config.user.bin",
+    "config.sys.bin",
+    "config.hw.bin",
+};
+
+void platform_linux_set_cfg_dir(const char *dir) {
+  if (!dir) {
+    return;
+  }
+  // Create the directory if it doesn't exist (one level only).
+  mkdir(dir, 0755);
+  for (int i = 0; i < BM_CFG_PARTITION_COUNT; i++) {
+    snprintf(s_cfg_paths[i], sizeof(s_cfg_paths[i]), "%s/%s", dir,
+             k_partition_filenames[i]);
+  }
+  s_cfg_dir_set = true;
+}
 
 bool bm_config_read(BmConfigPartition partition, uint32_t offset,
                     uint8_t *buffer, size_t length, uint32_t timeout_ms) {
-  (void)partition;
-  (void)offset;
   (void)timeout_ms;
-  if (buffer && length) {
+  if (!buffer || !length) {
+    return true;
+  }
+  // No cfg-dir configured — return zeros (fresh partition).
+  if (!s_cfg_dir_set || partition >= BM_CFG_PARTITION_COUNT) {
     memset(buffer, 0, length);
+    return true;
+  }
+  FILE *f = fopen(s_cfg_paths[partition], "rb");
+  if (!f) {
+    // File doesn't exist yet — return zeros so config_init() creates a fresh
+    // partition, which will be written back via bm_config_write on first save.
+    memset(buffer, 0, length);
+    return true;
+  }
+  if (fseek(f, (long)offset, SEEK_SET) != 0) {
+    fclose(f);
+    memset(buffer, 0, length);
+    return true;
+  }
+  size_t n = fread(buffer, 1, length, f);
+  fclose(f);
+  // Zero-fill any remainder (file may be shorter than requested length).
+  if (n < length) {
+    memset(buffer + n, 0, length - n);
   }
   return true;
 }
 
 bool bm_config_write(BmConfigPartition partition, uint32_t offset,
                      uint8_t *buffer, size_t length, uint32_t timeout_ms) {
-  (void)partition;
-  (void)offset;
-  (void)buffer;
-  (void)length;
   (void)timeout_ms;
-  return true;
+  if (!s_cfg_dir_set || partition >= BM_CFG_PARTITION_COUNT) {
+    return true;
+  }
+  if (!buffer || !length) {
+    return true;
+  }
+  FILE *f = fopen(s_cfg_paths[partition], "r+b");
+  if (!f) {
+    // File doesn't exist — create it.
+    f = fopen(s_cfg_paths[partition], "wb");
+  }
+  if (!f) {
+    return false;
+  }
+  if (fseek(f, (long)offset, SEEK_SET) != 0) {
+    fclose(f);
+    return false;
+  }
+  size_t n = fwrite(buffer, 1, length, f);
+  fflush(f);
+  fclose(f);
+  return n == length;
 }
 
 void bm_config_reset(void) {}
