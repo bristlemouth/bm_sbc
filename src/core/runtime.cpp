@@ -1,27 +1,27 @@
 #include "runtime.h"
-#include "virtual_port_device.h"
+#include "bm_config.h"
 #include "gateway_device.h"
 #include "pcap_file_sink.h"
 #include "platform_linux.h"
 #include "uart_l2_transport.h"
-#include "bm_config.h"
+#include "virtual_port_device.h"
 // topology.h, bm_service.h, l2.h, pubsub.h have extern "C" guards.
 // device.h, bm_ip.h, bcmp.h, middleware.h do not — wrap them explicitly.
-#include "l2.h"
-#include "topology.h"
 #include "bm_service.h"
+#include "l2.h"
 #include "pubsub.h"
+#include "topology.h"
 extern "C" {
-#include "device.h"
-#include "bm_ip.h"
 #include "bcmp.h"
+#include "bm_ip.h"
+#include "config_cbor_map_service.h"
+#include "device.h"
 #include "middleware.h"
 #include "pcap.h"
-#include "config_cbor_map_service.h"
 #include "sys_info_service.h"
 }
-#include "tomlc17.h"
 #include "git_sha.h"
+#include "tomlc17.h"
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,8 +34,8 @@ static const char *k_usage =
     "  --init       <path>    TOML init file (provides all settings below).\n"
     "  --node-id    <hex64>   This node's 64-bit Bristlemouth node ID.\n"
     "  --cfg-dir    <path>    Directory for config partition files.\n"
-    "  --peer       <hex64>   A peer node ID; repeat up to 16 times (optional).\n"
-    "                         (16 peers triggers a truncation warning; 15 are used.)\n"
+    "  --peer       <hex64>   A peer node ID; repeat up to 15 times.\n"
+    "                         (16 peers triggers a truncation warning)\n"
     "  --socket-dir <path>    Unix socket directory (default: /tmp).\n"
     "  --uart       <device>  Serial device path for UART gateway mode.\n"
     "  --baud       <rate>    Baud rate for UART (default: 115200).\n"
@@ -67,9 +67,8 @@ static bool parse_hex64(const char *s, uint64_t *out) {
 /// Strings returned by toml_get() point into the parsed document memory and
 /// must NOT be free()'d individually — toml_free() releases everything.
 static int load_init_file(const char *path, VirtualPortCfg *vpc,
-                          bool *node_id_set, char *cfg_dir,
-                          size_t cfg_dir_sz, char *uart_path,
-                          size_t uart_path_sz, int *baud_rate,
+                          bool *node_id_set, char *cfg_dir, size_t cfg_dir_sz,
+                          char *uart_path, size_t uart_path_sz, int *baud_rate,
                           char *pcap_path, size_t pcap_path_sz) {
   toml_result_t res = toml_parse_file_ex(path);
   if (!res.ok) {
@@ -145,13 +144,16 @@ static int load_init_file(const char *path, VirtualPortCfg *vpc,
 
   toml_free(res);
   return 0;
+}
+
 // Read Serial and Model from /proc/cpuinfo and build a device name.
 // Returns "rpi_<serial>" if Model contains "Raspberry Pi", otherwise
 // just "<serial>". Falls back to BM_SBC_DEVICE_NAME if unavailable.
 static const char *read_device_name() {
   static char buf[32];
   FILE *f = fopen("/proc/cpuinfo", "r");
-  if (!f) return BM_SBC_DEVICE_NAME;
+  if (!f)
+    return BM_SBC_DEVICE_NAME;
 
   char serial_str[32] = {0};
   bool is_rpi = false;
@@ -166,7 +168,8 @@ static const char *read_device_name() {
   }
   fclose(f);
 
-  if (serial_str[0] == '\0') return BM_SBC_DEVICE_NAME;
+  if (serial_str[0] == '\0')
+    return BM_SBC_DEVICE_NAME;
   snprintf(buf, sizeof(buf), "%s%s", is_rpi ? "rpi_" : "", serial_str);
   return buf;
 }
@@ -191,80 +194,79 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   char init_path[512] = {0};
 
   static const struct option long_opts[] = {
-      {"init",       required_argument, NULL, 'i'},
-      {"node-id",    required_argument, NULL, 'n'},
-      {"cfg-dir",    required_argument, NULL, 'd'},
-      {"peer",       required_argument, NULL, 'p'},
+      {"init", required_argument, NULL, 'i'},
+      {"node-id", required_argument, NULL, 'n'},
+      {"cfg-dir", required_argument, NULL, 'd'},
+      {"peer", required_argument, NULL, 'p'},
       {"socket-dir", required_argument, NULL, 's'},
-      {"uart",       required_argument, NULL, 'u'},
-      {"baud",       required_argument, NULL, 'b'},
-      {"pcap",       required_argument, NULL, 'c'},
+      {"uart", required_argument, NULL, 'u'},
+      {"baud", required_argument, NULL, 'b'},
+      {"pcap", required_argument, NULL, 'c'},
       {NULL, 0, NULL, 0},
   };
 
   int opt;
   while ((opt = getopt_long(argc, argv, "", long_opts, NULL)) != -1) {
     switch (opt) {
-      case 'i': {
-        strncpy(init_path, optarg, sizeof(init_path) - 1);
-        break;
-      }
-      case 'n': {
-        if (!parse_hex64(optarg, &vpc.own_node_id)) {
-          fprintf(stderr, "bm_sbc: invalid --node-id value: %s\n", optarg);
-          fprintf(stderr, "%s", k_usage);
-          return 1;
-        }
-        node_id_set = true;
-        break;
-      }
-      case 'd': {
-        strncpy(cfg_dir, optarg, sizeof(cfg_dir) - 1);
-        break;
-      }
-      case 'p': {
-        if (vpc.num_peers >= VIRTUAL_PORT_CFG_MAX_PEERS) {
-          fprintf(stderr,
-                  "bm_sbc: too many --peer flags (max %d); ignoring %s\n",
-                  VIRTUAL_PORT_CFG_MAX_PEERS, optarg);
-          break;
-        }
-        uint64_t pid;
-        if (!parse_hex64(optarg, &pid)) {
-          fprintf(stderr, "bm_sbc: invalid --peer value: %s\n", optarg);
-          fprintf(stderr, "%s", k_usage);
-          return 1;
-        }
-        vpc.peer_ids[vpc.num_peers++] = pid;
-        break;
-      }
-      case 's': {
-        strncpy(vpc.socket_dir, optarg, sizeof(vpc.socket_dir) - 1);
-        break;
-      }
-      case 'u': {
-        strncpy(uart_path, optarg, sizeof(uart_path) - 1);
-        break;
-      }
-      case 'b': {
-        char *end = NULL;
-        baud_rate = (int)strtol(optarg, &end, 10);
-        if (!end || *end != '\0' || baud_rate <= 0) {
-          fprintf(stderr, "bm_sbc: invalid --baud value: %s\n", optarg);
-          fprintf(stderr, "%s", k_usage);
-          return 1;
-        }
-        break;
-      }
-      case 'c': {
-        strncpy(pcap_path, optarg, sizeof(pcap_path) - 1);
-        break;
-      }
-      default: {
-        fprintf(stderr, "bm_sbc: unrecognised option\n");
+    case 'i': {
+      strncpy(init_path, optarg, sizeof(init_path) - 1);
+      break;
+    }
+    case 'n': {
+      if (!parse_hex64(optarg, &vpc.own_node_id)) {
+        fprintf(stderr, "bm_sbc: invalid --node-id value: %s\n", optarg);
         fprintf(stderr, "%s", k_usage);
         return 1;
       }
+      node_id_set = true;
+      break;
+    }
+    case 'd': {
+      strncpy(cfg_dir, optarg, sizeof(cfg_dir) - 1);
+      break;
+    }
+    case 'p': {
+      if (vpc.num_peers >= VIRTUAL_PORT_CFG_MAX_PEERS) {
+        fprintf(stderr, "bm_sbc: too many --peer flags (max %d); ignoring %s\n",
+                VIRTUAL_PORT_CFG_MAX_PEERS, optarg);
+        break;
+      }
+      uint64_t pid;
+      if (!parse_hex64(optarg, &pid)) {
+        fprintf(stderr, "bm_sbc: invalid --peer value: %s\n", optarg);
+        fprintf(stderr, "%s", k_usage);
+        return 1;
+      }
+      vpc.peer_ids[vpc.num_peers++] = pid;
+      break;
+    }
+    case 's': {
+      strncpy(vpc.socket_dir, optarg, sizeof(vpc.socket_dir) - 1);
+      break;
+    }
+    case 'u': {
+      strncpy(uart_path, optarg, sizeof(uart_path) - 1);
+      break;
+    }
+    case 'b': {
+      char *end = NULL;
+      baud_rate = (int)strtol(optarg, &end, 10);
+      if (!end || *end != '\0' || baud_rate <= 0) {
+        fprintf(stderr, "bm_sbc: invalid --baud value: %s\n", optarg);
+        fprintf(stderr, "%s", k_usage);
+        return 1;
+      }
+      break;
+    }
+    case 'c': {
+      strncpy(pcap_path, optarg, sizeof(pcap_path) - 1);
+      break;
+    }
+    default: {
+      fprintf(stderr, "bm_sbc: unrecognised option\n");
+      fprintf(stderr, "%s", k_usage);
+      return 1;
+    }
     }
   }
 
@@ -350,21 +352,21 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   // Build the version string in the same format as bm_protocol embedded
   // apps: "app_name@version_tag" (e.g. "multinode@v0.1.0-3-g472aefb3").
   static char version_str_buf[128];
-  snprintf(version_str_buf, sizeof(version_str_buf),
-           "%s@%s", app_name, BM_SBC_VERSION_TAG);
+  snprintf(version_str_buf, sizeof(version_str_buf), "%s@%s", app_name,
+           BM_SBC_VERSION_TAG);
 
   DeviceCfg dev_cfg;
   memset(&dev_cfg, 0, sizeof(dev_cfg));
-  dev_cfg.node_id        = vpc.own_node_id;
-  dev_cfg.git_sha        = BM_SBC_GIT_SHA;
-  dev_cfg.device_name    = read_device_name();
+  dev_cfg.node_id = vpc.own_node_id;
+  dev_cfg.git_sha = BM_SBC_GIT_SHA;
+  dev_cfg.device_name = read_device_name();
   dev_cfg.version_string = version_str_buf;
-  dev_cfg.vendor_id      = BM_SBC_VENDOR_ID;
-  dev_cfg.product_id     = BM_SBC_PRODUCT_ID;
-  dev_cfg.hw_ver         = BM_SBC_HW_VER;
-  dev_cfg.ver_major      = BM_SBC_VERSION_MAJOR;
-  dev_cfg.ver_minor      = BM_SBC_VERSION_MINOR;
-  dev_cfg.ver_patch      = BM_SBC_VERSION_PATCH;
+  dev_cfg.vendor_id = BM_SBC_VENDOR_ID;
+  dev_cfg.product_id = BM_SBC_PRODUCT_ID;
+  dev_cfg.hw_ver = BM_SBC_HW_VER;
+  dev_cfg.ver_major = BM_SBC_VERSION_MAJOR;
+  dev_cfg.ver_minor = BM_SBC_VERSION_MINOR;
+  dev_cfg.ver_patch = BM_SBC_VERSION_PATCH;
   device_init(dev_cfg);
 
   // --- VirtualPortDevice setup ------------------------------------------
@@ -374,8 +376,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   if (gateway_mode) {
     // Gateway mode: composite device wrapping VPD + UART.
     int uart_err = uart_l2_transport_init(uart_path, baud_rate,
-                                          gateway_uart_rx_cb,
-                                          nullptr);
+                                          gateway_uart_rx_cb, nullptr);
     if (uart_err != 0) {
       fprintf(stderr, "bm_sbc: UART transport init failed\n");
       return 1;
@@ -418,4 +419,3 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   bm_debug("bm_sbc: stack initialized\n");
   return 0;
 }
-
