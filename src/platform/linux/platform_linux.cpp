@@ -1,5 +1,7 @@
 #include "platform_linux.h"
 #include "bm_config.h"
+#include <errno.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -44,9 +46,25 @@ void bm_config_reset(void) {}
 // ---------------------------------------------------------------------------
 
 BmErr bm_rtc_set(const RtcTimeAndDate *time_and_date) {
-  // Updating the system clock requires elevated privileges; accept the call
-  // and return success so the protocol stack does not stall.
-  (void)time_and_date;
+  struct tm t = {};
+  t.tm_year = time_and_date->year - 1900;
+  t.tm_mon  = time_and_date->month - 1;
+  t.tm_mday = time_and_date->day;
+  t.tm_hour = time_and_date->hour;
+  t.tm_min  = time_and_date->minute;
+  t.tm_sec  = time_and_date->second;
+
+  struct timespec ts;
+  ts.tv_sec  = timegm(&t);
+  ts.tv_nsec = (long)time_and_date->ms * 1000000L;
+
+  if (clock_settime(CLOCK_REALTIME, &ts) != 0) {
+    if (errno == EPERM || errno == EACCES) {
+      fprintf(stderr, "bm_rtc_set: insufficient privileges to set system clock\n");
+      return BmEPERM;
+    }
+    return BmEIO;
+  }
   return BmOK;
 }
 
