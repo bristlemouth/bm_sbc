@@ -10,6 +10,8 @@
 /// Parse command-line arguments and initialize the runtime.
 /// @param argc argument count
 /// @param argv argument vector
+/// @param app_name short application name (e.g. "multinode"), used in
+///        the BCMP version string and sysinfo service replies.
 /// @return 0 on success, non-zero on failure
-int bm_sbc_runtime_init(int argc, char **argv);
+int bm_sbc_runtime_init(int argc, char **argv, const char *app_name);
 

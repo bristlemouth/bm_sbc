@@ -1,11 +1,11 @@
 #ifndef __BM_CONFIG_H__
 #define __BM_CONFIG_H__
 
-#ifdef BM_SBC_APP_NAME
-#define bm_app_name BM_SBC_APP_NAME
-#else
-#define bm_app_name "bm_sbc"
-#endif
+// App name set at runtime by bm_sbc_runtime_init(), so the sysinfo
+// service and any other consumer of bm_app_name picks up the per-app
+// value (e.g. "multinode") rather than a generic default.
+extern const char *bm_sbc_app_name_runtime;
+#define bm_app_name bm_sbc_app_name_runtime
 
 #define bm_debug(format, ...) printf(format, ##__VA_ARGS__)
 

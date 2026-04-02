@@ -37,7 +37,13 @@ static const char *k_usage =
     "  --baud       <rate>    Baud rate for UART (default: 115200).\n"
     "  --pcap       <path>    Write captured L2 frames to a pcap file.\n";
 
-int bm_sbc_runtime_init(int argc, char **argv) {
+// App name passed in from main() (which is compiled per-app target and
+// therefore has access to BM_SBC_APP_NAME).  Stored here so that
+// bm_app_name can reference it at any time after init.
+const char *bm_sbc_app_name_runtime = "bm_sbc";
+
+int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
+  bm_sbc_app_name_runtime = app_name;
   // Make stdout line-buffered so every bm_debug/printf call ending in '\n'
   // flushes immediately, even when output is redirected to a file.  Without
   // this, ping-reply lines printed by the BCMP thread can be lost when the
@@ -140,7 +146,7 @@ int bm_sbc_runtime_init(int argc, char **argv) {
   // apps: "app_name@version_tag" (e.g. "multinode@v0.1.0-3-g472aefb3").
   static char version_str_buf[128];
   snprintf(version_str_buf, sizeof(version_str_buf),
-           "%s@%s", bm_app_name, BM_SBC_VERSION_TAG);
+           "%s@%s", app_name, BM_SBC_VERSION_TAG);
 
   DeviceCfg dev_cfg;
   memset(&dev_cfg, 0, sizeof(dev_cfg));
