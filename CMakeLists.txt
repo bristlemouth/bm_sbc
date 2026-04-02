@@ -41,6 +41,12 @@ set(BM_HOSTED ON CACHE BOOL "Build bm_core for hosted environment (Linux/macOS)"
 add_subdirectory(${BM_CORE_DIR})
 
 # ---------------------------------------------------------------------------
+# tomlc17 – TOML v1.1 parser (submodule, MIT license, tag R260323)
+# ---------------------------------------------------------------------------
+add_library(tomlc17 STATIC ${CMAKE_CURRENT_SOURCE_DIR}/lib/tomlc17/src/tomlc17.c)
+target_include_directories(tomlc17 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib/tomlc17/src)
+
+# ---------------------------------------------------------------------------
 # Git SHA – regenerated on every build via a custom command.
 # The helper script only overwrites git_sha.h when the SHA changes,
 # so runtime.cpp is not recompiled needlessly.
@@ -81,7 +87,7 @@ target_include_directories(bm_sbc_core
 target_include_directories(bm_sbc_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 add_dependencies(bm_sbc_core git_sha_header)
 
-target_link_libraries(bm_sbc_core PUBLIC bmcore)
+target_link_libraries(bm_sbc_core PUBLIC bmcore tomlc17)
 
 # ---------------------------------------------------------------------------
 # App selection helpers (section 5)

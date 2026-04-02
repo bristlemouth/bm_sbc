@@ -2,6 +2,7 @@
 #include "virtual_port_device.h"
 #include "gateway_device.h"
 #include "pcap_file_sink.h"
+#include "platform_linux.h"
 #include "uart_l2_transport.h"
 #include "bm_config.h"
 // topology.h, bm_service.h, l2.h, pubsub.h have extern "C" guards.
@@ -19,6 +20,7 @@ extern "C" {
 #include "config_cbor_map_service.h"
 #include "sys_info_service.h"
 }
+#include "tomlc17.h"
 #include "git_sha.h"
 #include <getopt.h>
 #include <stdio.h>
@@ -26,21 +28,124 @@ extern "C" {
 #include <string.h>
 
 static const char *k_usage =
-    "Usage: bm_sbc --node-id <hex64> [--peer <hex64>]... [--socket-dir <path>]\n"
-    "              [--uart <device>] [--baud <rate>] [--pcap <path>]\n"
+    "Usage: bm_sbc --init <toml> [options...]\n"
+    "       bm_sbc --node-id <hex64> [options...]\n"
     "\n"
-    "  --node-id    <hex64>   This node's 64-bit Bristlemouth node ID (required).\n"
+    "  --init       <path>    TOML init file (provides all settings below).\n"
+    "  --node-id    <hex64>   This node's 64-bit Bristlemouth node ID.\n"
+    "  --cfg-dir    <path>    Directory for config partition files.\n"
     "  --peer       <hex64>   A peer node ID; repeat up to 16 times (optional).\n"
     "                         (16 peers triggers a truncation warning; 15 are used.)\n"
     "  --socket-dir <path>    Unix socket directory (default: /tmp).\n"
     "  --uart       <device>  Serial device path for UART gateway mode.\n"
     "  --baud       <rate>    Baud rate for UART (default: 115200).\n"
-    "  --pcap       <path>    Write captured L2 frames to a pcap file.\n";
+    "  --pcap       <path>    Write captured L2 frames to a pcap file.\n"
+    "\n"
+    "CLI flags override values from the init file.\n";
 
 // App name passed in from main() (which is compiled per-app target and
 // therefore has access to BM_SBC_APP_NAME).  Stored here so that
 // bm_app_name can reference it at any time after init.
 const char *bm_sbc_app_name_runtime = "bm_sbc";
+
+/// Parse a hex64 string (with optional "0x"/"0X" prefix) into a uint64_t.
+/// Returns true on success and sets *out.
+static bool parse_hex64(const char *s, uint64_t *out) {
+  if (!s || !*s) {
+    return false;
+  }
+  char *end = NULL;
+  *out = strtoull(s, &end, 16);
+  return end && *end == '\0';
+}
+
+/// Load settings from a TOML init file.  Values are written into the
+/// provided output parameters only when present in the file — callers
+/// should pre-fill defaults before calling.
+///
+/// Uses the tomlc17 API: toml_parse_file_ex() / toml_get() / toml_free().
+/// Strings returned by toml_get() point into the parsed document memory and
+/// must NOT be free()'d individually — toml_free() releases everything.
+static int load_init_file(const char *path, VirtualPortCfg *vpc,
+                          bool *node_id_set, char *cfg_dir,
+                          size_t cfg_dir_sz, char *uart_path,
+                          size_t uart_path_sz, int *baud_rate,
+                          char *pcap_path, size_t pcap_path_sz) {
+  toml_result_t res = toml_parse_file_ex(path);
+  if (!res.ok) {
+    fprintf(stderr, "bm_sbc: TOML parse error in %s: %s\n", path, res.errmsg);
+    return 1;
+  }
+  toml_datum_t root = res.toptab;
+
+  // node-id (string, hex)
+  toml_datum_t d = toml_get(root, "node-id");
+  if (d.type == TOML_STRING) {
+    if (!parse_hex64(d.u.s, &vpc->own_node_id)) {
+      fprintf(stderr, "bm_sbc: invalid node-id in %s: %s\n", path, d.u.s);
+      toml_free(res);
+      return 1;
+    }
+    *node_id_set = true;
+  }
+
+  // cfg-dir (string)
+  d = toml_get(root, "cfg-dir");
+  if (d.type == TOML_STRING) {
+    strncpy(cfg_dir, d.u.s, cfg_dir_sz - 1);
+    cfg_dir[cfg_dir_sz - 1] = '\0';
+  }
+
+  // socket-dir (string)
+  d = toml_get(root, "socket-dir");
+  if (d.type == TOML_STRING) {
+    strncpy(vpc->socket_dir, d.u.s, sizeof(vpc->socket_dir) - 1);
+  }
+
+  // peers (array of strings)
+  toml_datum_t peers_arr = toml_get(root, "peers");
+  if (peers_arr.type == TOML_ARRAY) {
+    for (int i = 0; i < peers_arr.u.arr.size; i++) {
+      if (vpc->num_peers >= VIRTUAL_PORT_CFG_MAX_PEERS) {
+        fprintf(stderr, "bm_sbc: too many peers in %s (max %d)\n", path,
+                VIRTUAL_PORT_CFG_MAX_PEERS);
+        break;
+      }
+      toml_datum_t elem = peers_arr.u.arr.elem[i];
+      if (elem.type == TOML_STRING) {
+        uint64_t pid;
+        if (parse_hex64(elem.u.s, &pid)) {
+          vpc->peer_ids[vpc->num_peers++] = pid;
+        } else {
+          fprintf(stderr, "bm_sbc: invalid peer in %s: %s\n", path, elem.u.s);
+        }
+      }
+    }
+  }
+
+  // uart-device (string)
+  d = toml_get(root, "uart-device");
+  if (d.type == TOML_STRING) {
+    strncpy(uart_path, d.u.s, uart_path_sz - 1);
+    uart_path[uart_path_sz - 1] = '\0';
+  }
+
+  // uart-baud (int)
+  d = toml_get(root, "uart-baud");
+  if (d.type == TOML_INT64) {
+    *baud_rate = (int)d.u.int64;
+  }
+
+  // pcap (string)
+  d = toml_get(root, "pcap");
+  if (d.type == TOML_STRING) {
+    strncpy(pcap_path, d.u.s, pcap_path_sz - 1);
+    pcap_path[pcap_path_sz - 1] = '\0';
+  }
+
+  toml_free(res);
+  return 0;
+}
 
 int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   bm_sbc_app_name_runtime = app_name;
@@ -49,18 +154,22 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   // this, ping-reply lines printed by the BCMP thread can be lost when the
   // process is killed before the 8 KiB libc buffer fills up.
   setvbuf(stdout, NULL, _IOLBF, 0);
-  // --- Task 3a: CLI parsing -------------------------------------------
+  // --- CLI parsing -------------------------------------------------------
   VirtualPortCfg vpc;
   memset(&vpc, 0, sizeof(vpc));
   strncpy(vpc.socket_dir, VIRTUAL_PORT_DEFAULT_SOCKET_DIR,
           sizeof(vpc.socket_dir) - 1);
   bool node_id_set = false;
+  char cfg_dir[512] = {0};
   char uart_path[128] = {0};
   char pcap_path[256] = {0};
   int baud_rate = 115200;
+  char init_path[512] = {0};
 
   static const struct option long_opts[] = {
+      {"init",       required_argument, NULL, 'i'},
       {"node-id",    required_argument, NULL, 'n'},
+      {"cfg-dir",    required_argument, NULL, 'd'},
       {"peer",       required_argument, NULL, 'p'},
       {"socket-dir", required_argument, NULL, 's'},
       {"uart",       required_argument, NULL, 'u'},
@@ -72,15 +181,21 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   int opt;
   while ((opt = getopt_long(argc, argv, "", long_opts, NULL)) != -1) {
     switch (opt) {
+      case 'i': {
+        strncpy(init_path, optarg, sizeof(init_path) - 1);
+        break;
+      }
       case 'n': {
-        char *end = NULL;
-        vpc.own_node_id = strtoull(optarg, &end, 16);
-        if (!end || *end != '\0') {
+        if (!parse_hex64(optarg, &vpc.own_node_id)) {
           fprintf(stderr, "bm_sbc: invalid --node-id value: %s\n", optarg);
           fprintf(stderr, "%s", k_usage);
           return 1;
         }
         node_id_set = true;
+        break;
+      }
+      case 'd': {
+        strncpy(cfg_dir, optarg, sizeof(cfg_dir) - 1);
         break;
       }
       case 'p': {
@@ -90,9 +205,8 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
                   VIRTUAL_PORT_CFG_MAX_PEERS, optarg);
           break;
         }
-        char *end = NULL;
-        uint64_t pid = strtoull(optarg, &end, 16);
-        if (!end || *end != '\0') {
+        uint64_t pid;
+        if (!parse_hex64(optarg, &pid)) {
           fprintf(stderr, "bm_sbc: invalid --peer value: %s\n", optarg);
           fprintf(stderr, "%s", k_usage);
           return 1;
@@ -130,10 +244,77 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     }
   }
 
+  // --- Load TOML init file (if given), then let CLI flags override ------
+  if (init_path[0] != '\0') {
+    // Save CLI-provided values so we can re-apply them after the TOML load.
+    bool cli_node_id_set = node_id_set;
+    uint64_t cli_node_id = vpc.own_node_id;
+    char cli_cfg_dir[512];
+    strncpy(cli_cfg_dir, cfg_dir, sizeof(cli_cfg_dir));
+    char cli_socket_dir[sizeof(vpc.socket_dir)];
+    strncpy(cli_socket_dir, vpc.socket_dir, sizeof(cli_socket_dir));
+    uint8_t cli_num_peers = vpc.num_peers;
+    uint64_t cli_peer_ids[VIRTUAL_PORT_CFG_MAX_PEERS];
+    memcpy(cli_peer_ids, vpc.peer_ids, sizeof(cli_peer_ids));
+    char cli_uart_path[128];
+    strncpy(cli_uart_path, uart_path, sizeof(cli_uart_path));
+    int cli_baud_rate = baud_rate;
+    char cli_pcap_path[256];
+    strncpy(cli_pcap_path, pcap_path, sizeof(cli_pcap_path));
+
+    // Reset to defaults before loading from file.
+    memset(&vpc, 0, sizeof(vpc));
+    strncpy(vpc.socket_dir, VIRTUAL_PORT_DEFAULT_SOCKET_DIR,
+            sizeof(vpc.socket_dir) - 1);
+    node_id_set = false;
+    memset(cfg_dir, 0, sizeof(cfg_dir));
+    memset(uart_path, 0, sizeof(uart_path));
+    memset(pcap_path, 0, sizeof(pcap_path));
+    baud_rate = 115200;
+
+    int rc = load_init_file(init_path, &vpc, &node_id_set, cfg_dir,
+                            sizeof(cfg_dir), uart_path, sizeof(uart_path),
+                            &baud_rate, pcap_path, sizeof(pcap_path));
+    if (rc != 0) {
+      return rc;
+    }
+
+    // Re-apply CLI overrides (non-default values win).
+    if (cli_node_id_set) {
+      vpc.own_node_id = cli_node_id;
+      node_id_set = true;
+    }
+    if (cli_cfg_dir[0] != '\0') {
+      strncpy(cfg_dir, cli_cfg_dir, sizeof(cfg_dir) - 1);
+    }
+    if (strcmp(cli_socket_dir, VIRTUAL_PORT_DEFAULT_SOCKET_DIR) != 0) {
+      strncpy(vpc.socket_dir, cli_socket_dir, sizeof(vpc.socket_dir) - 1);
+    }
+    if (cli_num_peers > 0) {
+      vpc.num_peers = cli_num_peers;
+      memcpy(vpc.peer_ids, cli_peer_ids, sizeof(cli_peer_ids));
+    }
+    if (cli_uart_path[0] != '\0') {
+      strncpy(uart_path, cli_uart_path, sizeof(uart_path) - 1);
+    }
+    if (cli_baud_rate != 115200) {
+      baud_rate = cli_baud_rate;
+    }
+    if (cli_pcap_path[0] != '\0') {
+      strncpy(pcap_path, cli_pcap_path, sizeof(pcap_path) - 1);
+    }
+  }
+
   if (!node_id_set) {
-    fprintf(stderr, "bm_sbc: --node-id is required\n");
+    fprintf(stderr, "bm_sbc: --node-id is required (via --init or CLI)\n");
     fprintf(stderr, "%s", k_usage);
     return 1;
+  }
+
+  // --- Config partition persistence --------------------------------------
+  if (cfg_dir[0] != '\0') {
+    platform_linux_set_cfg_dir(cfg_dir);
+    bm_debug("bm_sbc: cfg-dir=%s\n", cfg_dir);
   }
 
   bool gateway_mode = (uart_path[0] != '\0');
@@ -141,7 +322,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
            vpc.own_node_id, (unsigned)vpc.num_peers, vpc.socket_dir,
            gateway_mode ? " uart=" : "", gateway_mode ? uart_path : "");
 
-  // --- Task 3b: device_init -------------------------------------------
+  // --- device_init -------------------------------------------------------
   // Build the version string in the same format as bm_protocol embedded
   // apps: "app_name@version_tag" (e.g. "multinode@v0.1.0-3-g472aefb3").
   static char version_str_buf[128];
@@ -162,7 +343,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   dev_cfg.ver_patch      = BM_SBC_VERSION_PATCH;
   device_init(dev_cfg);
 
-  // --- Task 3c: VirtualPortDevice setup --------------------------------
+  // --- VirtualPortDevice setup ------------------------------------------
   NetworkDevice vpd_dev = virtual_port_device_get(&vpc);
   NetworkDevice net_dev;
 
@@ -181,7 +362,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     net_dev = vpd_dev;
   }
 
-  // --- Task 3d: Bristlemouth startup sequence --------------------------
+  // --- Bristlemouth startup sequence ------------------------------------
   BmErr err = BmOK;
   bm_err_check(err, bm_l2_init(net_dev));
 
