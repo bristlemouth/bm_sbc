@@ -41,6 +41,20 @@ set(BM_HOSTED ON CACHE BOOL "Build bm_core for hosted environment (Linux/macOS)"
 add_subdirectory(${BM_CORE_DIR})
 
 # ---------------------------------------------------------------------------
+# Git SHA – regenerated on every build via a custom command.
+# The helper script only overwrites git_sha.h when the SHA changes,
+# so runtime.cpp is not recompiled needlessly.
+# ---------------------------------------------------------------------------
+set(GIT_SHA_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/git_sha.h)
+
+add_custom_target(git_sha_header ALL
+  COMMAND ${CMAKE_COMMAND}
+    -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DOUT=${GIT_SHA_HEADER}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/gen_git_sha.cmake
+)
+
+# ---------------------------------------------------------------------------
 # bm_sbc_core – shared stack runtime library (section 3.1)
 # ---------------------------------------------------------------------------
 add_library(bm_sbc_core STATIC
@@ -63,6 +77,9 @@ target_include_directories(bm_sbc_core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net
     ${CMAKE_CURRENT_SOURCE_DIR}/src/transports/uart_l2
 )
+
+target_include_directories(bm_sbc_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+add_dependencies(bm_sbc_core git_sha_header)
 
 target_link_libraries(bm_sbc_core PUBLIC bmcore)
 

@@ -19,6 +19,7 @@ extern "C" {
 #include "config_cbor_map_service.h"
 #include "sys_info_service.h"
 }
+#include "git_sha.h"
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -138,7 +139,7 @@ int bm_sbc_runtime_init(int argc, char **argv) {
   DeviceCfg dev_cfg;
   memset(&dev_cfg, 0, sizeof(dev_cfg));
   dev_cfg.node_id        = vpc.own_node_id;
-  dev_cfg.git_sha        = 0;
+  dev_cfg.git_sha        = BM_SBC_GIT_SHA;
   dev_cfg.device_name    = BM_SBC_DEVICE_NAME;
   dev_cfg.version_string = BM_SBC_VERSION_STRING;
   dev_cfg.vendor_id      = BM_SBC_VENDOR_ID;
