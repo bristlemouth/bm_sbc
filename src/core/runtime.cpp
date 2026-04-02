@@ -145,6 +145,30 @@ static int load_init_file(const char *path, VirtualPortCfg *vpc,
 
   toml_free(res);
   return 0;
+// Read Serial and Model from /proc/cpuinfo and build a device name.
+// Returns "rpi_<serial>" if Model contains "Raspberry Pi", otherwise
+// just "<serial>". Falls back to BM_SBC_DEVICE_NAME if unavailable.
+static const char *read_device_name() {
+  static char buf[32];
+  FILE *f = fopen("/proc/cpuinfo", "r");
+  if (!f) return BM_SBC_DEVICE_NAME;
+
+  char serial_str[32] = {0};
+  bool is_rpi = false;
+  char line[128];
+  while (fgets(line, sizeof(line), f)) {
+    unsigned long long serial = 0;
+    if (sscanf(line, "Serial : %llx", &serial) == 1) {
+      snprintf(serial_str, sizeof(serial_str), "%llx", serial);
+    } else if (strstr(line, "Model") && strstr(line, "Raspberry Pi")) {
+      is_rpi = true;
+    }
+  }
+  fclose(f);
+
+  if (serial_str[0] == '\0') return BM_SBC_DEVICE_NAME;
+  snprintf(buf, sizeof(buf), "%s%s", is_rpi ? "rpi_" : "", serial_str);
+  return buf;
 }
 
 int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
@@ -333,7 +357,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   memset(&dev_cfg, 0, sizeof(dev_cfg));
   dev_cfg.node_id        = vpc.own_node_id;
   dev_cfg.git_sha        = BM_SBC_GIT_SHA;
-  dev_cfg.device_name    = BM_SBC_DEVICE_NAME;
+  dev_cfg.device_name    = read_device_name();
   dev_cfg.version_string = version_str_buf;
   dev_cfg.vendor_id      = BM_SBC_VENDOR_ID;
   dev_cfg.product_id     = BM_SBC_PRODUCT_ID;
