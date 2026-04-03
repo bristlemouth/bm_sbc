@@ -9,12 +9,25 @@ on the gateway process's network device. Frames pass through transparently
 
 ## Usage
 
+Via CLI flags:
 ```
 ./build/bm_sbc_multinode \
   --node-id 0x0000000000000001 \
   --peer 0x0000000000000002 \
   --uart /dev/ttyUSB0 \
   --baud 115200
+```
+
+Or via a TOML init file:
+```toml
+node-id     = "0x0000000000000001"
+socket-dir  = "/tmp"
+peers       = ["0x0000000000000002"]
+uart-device = "/dev/ttyUSB0"
+uart-baud   = 115200
+```
+```
+./build/bm_sbc_multinode --init gateway.toml
 ```
 
 This creates a gateway with:
