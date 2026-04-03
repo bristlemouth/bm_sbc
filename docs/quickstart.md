@@ -39,13 +39,21 @@ Start a node:
 ./build/bm_sbc_example --node-id 0x0000000000000001
 ```
 
-Start two connected nodes:
+Start two connected nodes using TOML init files (recommended):
+```
+./build/bm_sbc_multinode --init examples/node1.toml &
+./build/bm_sbc_multinode --init examples/node2.toml &
+```
+
+Or pass flags directly:
 ```
 ./build/bm_sbc_multinode --node-id 0x0001 --peer 0x0002 &
 ./build/bm_sbc_multinode --node-id 0x0002 --peer 0x0001 &
 ```
 
 Both nodes will discover each other, exchange pings, and log pub/sub traffic.
+Logs are written to `/var/log/bm_sbc/` by default; add `--log-stdout` to also
+print to the terminal.
 
 ## Run the tests
 
