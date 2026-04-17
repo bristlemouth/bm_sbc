@@ -10,22 +10,16 @@
 // ---------------------------------------------------------------------------
 
 /// The gateway wraps an existing VPD device and adds a UART port.
-/// The BM protocol encodes port numbers in a 4-bit nibble (max 15),
-/// so the total port count must not exceed 15.
-/// VPD owns ports 1..vpd_ports, UART is vpd_ports + 1 (== 15).
+/// VPD owns ports 1..vpd_ports; UART is vpd_ports + 1 (== GATEWAY_UART_PORT).
 static struct {
-  NetworkDevice vpd;          ///< Underlying VirtualPortDevice.
-  uint8_t vpd_ports;          ///< Number of VPD ports (cached).
-  uint8_t uart_port;          ///< Port number for the UART link.
+  NetworkDevice vpd; ///< Underlying VirtualPortDevice.
+  uint8_t vpd_ports; ///< Number of VPD ports (cached).
+  uint8_t uart_port; ///< Port number for the UART link.
 } s_gw;
 
 // ---------------------------------------------------------------------------
 // Trait implementation
 // ---------------------------------------------------------------------------
-
-/// Maximum total ports (constrained by the 4-bit port nibble in the BM L2
-/// protocol).  VPD gets max_total_ports - 1, UART gets the last slot.
-static const uint8_t max_total_ports = 15;
 
 static uint8_t gw_num_ports(void) {
   return s_gw.vpd_ports + 1; // VPD ports + 1 UART port
@@ -151,8 +145,8 @@ NetworkDevice gateway_device_get(NetworkDevice *vpd_dev) {
   s_gw.vpd = *vpd_dev; // copy by value — caller's local can go out of scope
   // Cap VPD ports so total (VPD + 1 UART) fits in a 4-bit port number.
   uint8_t raw_vpd_ports = s_gw.vpd.trait->num_ports();
-  s_gw.vpd_ports = (raw_vpd_ports >= max_total_ports)
-                       ? (uint8_t)(max_total_ports - 1)
+  s_gw.vpd_ports = (raw_vpd_ports >= MAX_TOTAL_PORTS)
+                       ? (uint8_t)(MAX_TOTAL_PORTS - 1)
                        : raw_vpd_ports;
   s_gw.uart_port = s_gw.vpd_ports + 1;
 

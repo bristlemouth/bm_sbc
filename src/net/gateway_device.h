@@ -14,6 +14,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/// BM L2 encodes ingress/egress port numbers in a 4-bit field, so 15 is the
+/// maximum representable port and is reserved for the UART uplink.
+#define MAX_TOTAL_PORTS  15
+#define GATEWAY_UART_PORT MAX_TOTAL_PORTS
+
 #ifdef __cplusplus
 extern "C" {
 #endif
