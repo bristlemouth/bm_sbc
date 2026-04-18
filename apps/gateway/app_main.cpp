@@ -50,8 +50,8 @@ static BmErr sbc_command_reply_cb(uint8_t *payload) {
     static char sbc_command[1024];
     size_t sbc_command_len = sizeof(sbc_command);
     memset(sbc_command, 0, sbc_command_len);
-    err = bcmp_config_decode_value(UINT32, msg->data, msg->data_length,
-                                   &sbc_command, &sbc_command_len);
+    err = bcmp_config_decode_value(STR, msg->data, msg->data_length,
+                                   sbc_command, &sbc_command_len);
     if (err == BmOK) {
       if (sbc_command_len > 0) {
         bm_log_info("Received sbc command: %.*s", (int)sbc_command_len,
