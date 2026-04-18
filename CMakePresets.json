@@ -10,6 +10,14 @@
       }
     },
     {
+      "name": "gateway",
+      "displayName": "Gateway app",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "APP": "gateway"
+      }
+    },
+    {
       "name": "multinode",
       "displayName": "Multinode app",
       "binaryDir": "${sourceDir}/build",
@@ -30,6 +38,11 @@
     {
       "name": "example",
       "configurePreset": "example",
+      "jobs": 4
+    },
+    {
+      "name": "gateway",
+      "configurePreset": "gateway",
       "jobs": 4
     },
     {
