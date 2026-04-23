@@ -25,7 +25,7 @@ cmake --build --preset all --clean-first
 
 echo ""
 echo "=== 3/5  CTest ==="
-ctest --test-dir build
+ctest --test-dir build/all
 
 echo ""
 echo "=== 4/5  Gateway loopback test ==="

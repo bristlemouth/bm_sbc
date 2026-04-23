@@ -12,11 +12,11 @@
 
 set -euo pipefail
 
-BINARY="${1:-./build/bm_sbc_multinode}"
+BINARY="${1:-./build/all/bm_sbc_multinode}"
 
 if [[ ! -x "$BINARY" ]]; then
   echo "Binary not found: $BINARY"
-  echo "Build with: cmake -B build -S . -DBUILD_ALL_APPS=ON && cmake --build build"
+  echo "Build with: cmake --preset all && cmake --build --preset all"
   exit 1
 fi
 
