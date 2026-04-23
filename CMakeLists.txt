@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.18)
 project(bm_sbc LANGUAGES C CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
@@ -13,7 +15,7 @@ set(APP "" CACHE STRING "Name of a single app under apps/ to build")
 option(BUILD_ALL_APPS "Build every app found under apps/" OFF)
 
 # ---------------------------------------------------------------------------
-# bm_core integration (section 4 of PLAN.md)
+# bm_core integration
 # ---------------------------------------------------------------------------
 # The submodule lives at lib/bm_core.  Its CMake helpers expose
 # setup_bm_ip_stack() and setup_bm_os() after we include the entry-point
@@ -135,6 +137,9 @@ if(APP)
 
   # Convenience alias: the default node executable name.
   add_executable(bm_sbc_node ALIAS bm_sbc_${APP})
+
+  install(TARGETS bm_sbc_${APP}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
   set(_BM_APP_SUMMARY "${APP}")
 

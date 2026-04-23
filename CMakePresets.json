@@ -4,7 +4,7 @@
     {
       "name": "example",
       "displayName": "Example app",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "APP": "example"
       }
@@ -12,7 +12,7 @@
     {
       "name": "gateway",
       "displayName": "Gateway app",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "APP": "gateway"
       }
@@ -20,7 +20,7 @@
     {
       "name": "multinode",
       "displayName": "Multinode app",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "APP": "multinode"
       }
@@ -28,7 +28,7 @@
     {
       "name": "all",
       "displayName": "All apps",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "BUILD_ALL_APPS": "ON"
       }
