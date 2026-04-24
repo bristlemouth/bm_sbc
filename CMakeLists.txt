@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.18)
 project(bm_sbc LANGUAGES C CXX)
 
+# Export compile_commands.json for IDE / clangd integration. Must be set
+# before any targets are defined so it covers bm_sbc_core, the apps, and
+# tests (not just bm_core, which sets it in its own subdirectory scope).
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -73,6 +78,7 @@ add_library(bm_sbc_core STATIC
   src/platform/linux/platform_linux.cpp
   src/net/virtual_port_device.cpp
   src/net/gateway_device.cpp
+  src/net/gateway_ipc.cpp
   src/transports/uart_l2/cobs.c
   src/transports/uart_l2/crc32c.c
   src/transports/uart_l2/frame_codec.c

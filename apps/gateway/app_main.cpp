@@ -1,5 +1,6 @@
 #include "bm_log.h"
 #include "gateway_device.h"
+#include "gateway_ipc.h"
 #include "messages/config.h"
 #include "messages/neighbors.h"
 #include "pubsub.h"
@@ -111,6 +112,7 @@ void setup(void) {
   await_uart_neighbor();
   get_sbc_command();
   bm_sub("gps-nmea/rmc", gprmc_callback);
+  gateway_ipc_init();
 }
 
-void loop(void) {}
+void loop(void) { gateway_ipc_poll(); }
