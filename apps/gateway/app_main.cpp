@@ -63,18 +63,6 @@ static BmErr sbc_command_reply_cb(uint8_t *payload) {
       }
     } else {
       bm_log_error("Failed to decode sbc command bcmp value, err=%d", err);
-      static char hex[3 * 256 + 1];
-      size_t hex_len = 0;
-      uint32_t dump_len = msg->data_length;
-      if (dump_len > 256) {
-        dump_len = 256;
-      }
-      for (uint32_t i = 0; i < dump_len; i++) {
-        hex_len += snprintf(hex + hex_len, sizeof(hex) - hex_len, "%02x ",
-                            msg->data[i]);
-      }
-      bm_log_debug("sbc command bcmp value cbor (%u bytes): %s",
-                   msg->data_length, hex);
     }
   }
 
