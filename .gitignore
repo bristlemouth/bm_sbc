@@ -1,4 +1,7 @@
 build
+.venv
+__pycache__/
+*.py[cod]
 .vscode
 .claude
 .DS_Store
