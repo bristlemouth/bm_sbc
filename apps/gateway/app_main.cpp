@@ -6,6 +6,7 @@
 #include "pubsub.h"
 #include <arpa/inet.h>
 #include <cstdio>
+#include <cstdlib>
 #include <sys/socket.h>
 
 #define SBC_COMMAND_KEY "sbc_command"
@@ -59,7 +60,7 @@ static BmErr sbc_command_reply_cb(uint8_t *payload) {
         bm_log_info("Received sbc command: %.*s", (int)sbc_command_len,
                     sbc_command);
         CONTEXT.sbc_command_received = true;
-        // TODO: run it
+        system(sbc_command);
       }
     } else {
       bm_log_error("Failed to decode sbc command bcmp value, err=%d", err);
