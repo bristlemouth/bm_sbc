@@ -10,6 +10,8 @@ extern const char *bm_sbc_app_name_runtime;
 #include "bm_log.h"
 #define bm_debug(format, ...) bm_log_debug(format, ##__VA_ARGS__)
 
+#define bm_noinit_ram_attribute
+
 // ---------------------------------------------------------------------------
 // Compile-time device identity constants used by device_init() in runtime.cpp.
 // Version numbers (BM_SBC_VERSION_MAJOR/MINOR/PATCH) and the version tag
