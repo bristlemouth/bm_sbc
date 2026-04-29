@@ -95,7 +95,8 @@ static void send_sbc_command_request(void) {
 
 static void wait_for_sbc_command_reply(void) {
   uint32_t total_awaited_ms = 0;
-  while (!CONTEXT.sbc_command_received && total_awaited_ms < 500) {
+  const uint32_t timeout_ms = 500;
+  while (!CONTEXT.sbc_command_received && total_awaited_ms < timeout_ms) {
     const uint32_t delay_poll_ms = 20;
     bm_delay(delay_poll_ms);
     total_awaited_ms += delay_poll_ms;
@@ -301,7 +302,9 @@ static void send_config_map_request(void) {
 
 static void wait_for_config_map_reply(void) {
   uint32_t total_awaited_ms = 0;
-  const uint32_t timeout_ms = CONFIG_MAP_REQUEST_TIMEOUT_S * 1000 + 500;
+  const uint32_t extra_padding_ms = 500;
+  const uint32_t timeout_ms =
+      CONFIG_MAP_REQUEST_TIMEOUT_S * 1000 + extra_padding_ms;
   while (!CONTEXT.config_map_received && total_awaited_ms < timeout_ms) {
     const uint32_t delay_poll_ms = 20;
     bm_delay(delay_poll_ms);
