@@ -15,12 +15,16 @@
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
-#include <string.h>
+#include <sstream>
+#include <string>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #define SBC_COMMAND_KEY "sbc_command"
 #define SBC_COMMAND_KEY_LEN (sizeof(SBC_COMMAND_KEY) - 1)
+
+#define WIFI_ENABLED_KEY "wifi_enabled"
+#define WIFI_ENABLED_KEY_LEN (sizeof(WIFI_ENABLED_KEY) - 1)
 
 #define INIT_LOG_PATH "/var/run/bristlemouth_init_log.txt"
 #define INIT_LOG_TMP_PATH INIT_LOG_PATH ".tmp"
@@ -39,6 +43,7 @@ static struct {
   char mote_app_name[MAX_STR_LEN_BYTES + 1] = "borealis2";
   bool sbc_command_received = false;
   bool config_map_received = false;
+  bool wifi_command_received = false;
 } CONTEXT;
 
 static void neighbor_cb(BcmpNeighbor *neighbor) {
@@ -110,10 +115,10 @@ static void send_sbc_command_request(void) {
   }
 }
 
-static void wait_for_sbc_command_reply(void) {
+static void wait_for_config_reply(bool *received) {
   uint32_t total_awaited_ms = 0;
   const uint32_t timeout_ms = 500;
-  while (!CONTEXT.sbc_command_received && total_awaited_ms < timeout_ms) {
+  while (!*received && total_awaited_ms < timeout_ms) {
     const uint32_t delay_poll_ms = 20;
     bm_delay(delay_poll_ms);
     total_awaited_ms += delay_poll_ms;
@@ -124,7 +129,7 @@ static void get_sbc_command(void) {
   int8_t retries_remaining = 3;
   while (!CONTEXT.sbc_command_received && retries_remaining > 0) {
     send_sbc_command_request();
-    wait_for_sbc_command_reply();
+    wait_for_config_reply(&CONTEXT.sbc_command_received);
     retries_remaining--;
   }
 }
@@ -420,6 +425,67 @@ static void get_mote_app_name(void) {
   }
 }
 
+static BmErr wifi_enabled_reply_cb(uint8_t *payload) {
+  bm_log_debug("Ticks in " WIFI_ENABLED_KEY " reply cb: %u",
+               bm_get_tick_count());
+
+  BmErr err = BmENODATA;
+  if (payload) {
+    BmConfigValue *msg = reinterpret_cast<BmConfigValue *>(payload);
+    uint32_t wifi_enabled;
+    size_t wifi_enabled_len = sizeof(wifi_enabled);
+    err = bcmp_config_decode_value(UINT32, msg->data, msg->data_length,
+                                   &wifi_enabled, &wifi_enabled_len);
+    if (err == BmOK) {
+      if (wifi_enabled_len > 0) {
+        bm_log_info("Received " WIFI_ENABLED_KEY ": %u", (uint)wifi_enabled);
+        CONTEXT.wifi_command_received = true;
+        const std::string disable_wifi_line = "dtoverlay=disable-wifi";
+        const std::string config_path = "/boot/firmware/config.txt";
+        std::stringstream config_command_stream;
+        if (!wifi_enabled) {
+          config_command_stream << "sed -zi '/" << disable_wifi_line
+                                << "/!s/$/\\n"
+                                << disable_wifi_line << "\\n/' " << config_path;
+        } else {
+          config_command_stream << "sed -i '/^" << disable_wifi_line << "$/d' "
+                                << config_path;
+	}
+        std::string config_command = config_command_stream.str();
+	bm_log_info("Invoking command: %s", config_command.c_str());
+        system(config_command.c_str());
+      }
+    } else {
+      bm_log_error("Failed to decode " WIFI_ENABLED_KEY " bcmp value, err=%d",
+                   err);
+    }
+  }
+
+  return err;
+}
+
+static void send_wifi_enable_request(void) {
+  bm_log_debug("Ticks before bcmp config get: %u", bm_get_tick_count());
+  BmErr err = BmOK;
+  bool sent = bcmp_config_get(CONTEXT.mote_node_id, BM_CFG_PARTITION_SYSTEM,
+                              WIFI_ENABLED_KEY_LEN, WIFI_ENABLED_KEY, &err,
+                              wifi_enabled_reply_cb);
+  bm_log_debug("Ticks after bcmp config get: %u", bm_get_tick_count());
+  if (!sent) {
+    bm_log_warn(
+        "Failed to send bcmp config get for " WIFI_ENABLED_KEY ", err=%d", err);
+  }
+}
+
+static void get_wifi_enable(void) {
+  int8_t retries_remaining = 3;
+  while (!CONTEXT.wifi_command_received && retries_remaining > 0) {
+    send_wifi_enable_request();
+    wait_for_config_reply(&CONTEXT.wifi_command_received);
+    retries_remaining--;
+  }
+}
+
 static void gprmc_callback(uint64_t node_id, const char *topic,
                            uint16_t topic_len, const uint8_t *data,
                            uint16_t data_len, uint8_t type, uint8_t version) {
@@ -441,6 +507,7 @@ void setup(void) {
   get_mote_app_name();
   get_mote_system_configs();
   get_sbc_command();
+  get_wifi_enable();
   gateway_ipc_init();
 }
 
