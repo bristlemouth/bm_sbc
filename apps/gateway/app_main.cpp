@@ -443,17 +443,25 @@ static BmErr wifi_enabled_reply_cb(uint8_t *payload) {
         const std::string disable_wifi_line = "dtoverlay=disable-wifi";
         const std::string config_path = "/boot/firmware/config.txt";
         std::stringstream config_command_stream;
+	std::string network_manager_service_action = "";
+
         if (!wifi_enabled) {
           config_command_stream << "sed -zi '/" << disable_wifi_line
                                 << "/!s/$/\\n"
                                 << disable_wifi_line << "\\n/' " << config_path;
+	  network_manager_service_action = "disable";
         } else {
           config_command_stream << "sed -i '/^" << disable_wifi_line << "$/d' "
                                 << config_path;
+	  network_manager_service_action = "enable";
 	}
         std::string config_command = config_command_stream.str();
-	bm_log_info("Invoking command: %s", config_command.c_str());
+	bm_log_info("Invoking command on config.txt: %s", config_command.c_str());
         system(config_command.c_str());
+	std::string systemctl_action = "systemctl " + network_manager_service_action
+					     + " --now NetworkManager";
+	bm_log_info("Invoking systemctl command: %s", systemctl_action.c_str());
+        system(systemctl_action.c_str());
       }
     } else {
       bm_log_error("Failed to decode " WIFI_ENABLED_KEY " bcmp value, err=%d",
