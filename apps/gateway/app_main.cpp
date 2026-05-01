@@ -43,6 +43,7 @@ static struct {
   bool sbc_command_received = false;
   bool config_map_received = false;
   bool wifi_command_received = false;
+  uint32_t wifi_enabled = 1;
 } CONTEXT;
 
 static void neighbor_cb(BcmpNeighbor *neighbor) {
@@ -431,37 +432,20 @@ static BmErr wifi_enabled_reply_cb(uint8_t *payload) {
   BmErr err = BmENODATA;
   if (payload) {
     BmConfigValue *msg = reinterpret_cast<BmConfigValue *>(payload);
-    uint32_t wifi_enabled;
-    size_t wifi_enabled_len = sizeof(wifi_enabled);
+    size_t wifi_enabled_len = sizeof(CONTEXT.wifi_enabled);
     err = bcmp_config_decode_value(UINT32, msg->data, msg->data_length,
-                                   &wifi_enabled, &wifi_enabled_len);
+                                   &CONTEXT.wifi_enabled, &wifi_enabled_len);
     if (err == BmOK) {
       if (wifi_enabled_len > 0) {
-        bm_log_info("Received " WIFI_ENABLED_KEY ": %u", (uint)wifi_enabled);
+        bm_log_info("Received " WIFI_ENABLED_KEY ": %u",
+                    (uint)CONTEXT.wifi_enabled);
         CONTEXT.wifi_command_received = true;
       }
     } else {
       bm_log_error("Failed to decode " WIFI_ENABLED_KEY
                    " bcmp value, enabling Wi-Fi, err=%d",
                    err);
-      wifi_enabled = 1;
     }
-
-    std::string network_manager_service_action = "enable";
-    std::string wifi_enable_action = "unblock";
-
-    if (!wifi_enabled) {
-      network_manager_service_action = "disable";
-      wifi_enable_action = "block";
-    }
-
-    std::string wifi_command = "rfkill " + wifi_enable_action + " wifi";
-    bm_log_info("Invoking command for Wi-Fi radio: %s", wifi_command.c_str());
-    system(wifi_command.c_str());
-    std::string systemctl_action =
-        "systemctl " + network_manager_service_action + " --now NetworkManager";
-    bm_log_info("Invoking systemctl command: %s", systemctl_action.c_str());
-    system(systemctl_action.c_str());
   }
 
   return err;
@@ -487,6 +471,22 @@ static void get_wifi_enable(void) {
     wait_for_config_reply(&CONTEXT.wifi_command_received);
     retries_remaining--;
   }
+
+  std::string network_manager_service_action = "enable";
+  std::string wifi_enable_action = "unblock";
+
+  if (!CONTEXT.wifi_enabled) {
+    network_manager_service_action = "disable";
+    wifi_enable_action = "block";
+  }
+
+  std::string wifi_command = "rfkill " + wifi_enable_action + " wifi";
+  bm_log_info("Invoking command for Wi-Fi radio: %s", wifi_command.c_str());
+  system(wifi_command.c_str());
+  std::string systemctl_action =
+      "systemctl " + network_manager_service_action + " --now NetworkManager";
+  bm_log_info("Invoking systemctl command: %s", systemctl_action.c_str());
+  system(systemctl_action.c_str());
 }
 
 static void gprmc_callback(uint64_t node_id, const char *topic,
