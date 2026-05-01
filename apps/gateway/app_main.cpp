@@ -26,7 +26,13 @@
 #define INIT_LOG_TMP_PATH INIT_LOG_PATH ".tmp"
 #define CONFIG_MAP_REQUEST_TIMEOUT_S 2
 
+static struct sockaddr_in GPS_DEST = {
+    .sin_family = AF_INET,
+    .sin_port = htons(5000),
+    .sin_addr = {.s_addr = inet_addr("127.0.0.1")}};
+
 static struct {
+  int gps_udp_socket_fd = -1;
   uint64_t mote_node_id = 0;
   bool mote_neighbor_found = false;
   bool mote_app_name_received = false;
@@ -417,14 +423,19 @@ static void get_mote_app_name(void) {
 static void gprmc_callback(uint64_t node_id, const char *topic,
                            uint16_t topic_len, const uint8_t *data,
                            uint16_t data_len, uint8_t type, uint8_t version) {
-  int sock = socket(AF_INET, SOCK_DGRAM, 0);
-  struct sockaddr_in dest = {.sin_family = AF_INET,
-                             .sin_port = htons(5000),
-                             .sin_addr = {.s_addr = inet_addr("127.0.0.1")}};
-  sendto(sock, data, data_len, 0, (struct sockaddr *)&dest, sizeof(dest));
+  ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, data, data_len, 0,
+                              (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
+  if (bytes_sent == -1) {
+    bm_log_error("GPS sendto failed: %s", strerror(errno));
+  }
 }
 
 void setup(void) {
+  CONTEXT.gps_udp_socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (CONTEXT.gps_udp_socket_fd == -1) {
+    bm_log_error("Failed to create GPS UDP socket: %s", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
   bm_sub("gps-nmea/rmc", gprmc_callback);
   await_uart_neighbor();
   get_mote_app_name();
