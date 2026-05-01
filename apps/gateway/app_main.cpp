@@ -15,7 +15,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
-#include <sstream>
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -440,33 +439,29 @@ static BmErr wifi_enabled_reply_cb(uint8_t *payload) {
       if (wifi_enabled_len > 0) {
         bm_log_info("Received " WIFI_ENABLED_KEY ": %u", (uint)wifi_enabled);
         CONTEXT.wifi_command_received = true;
-        const std::string disable_wifi_line = "dtoverlay=disable-wifi";
-        const std::string config_path = "/boot/firmware/config.txt";
-        std::stringstream config_command_stream;
-	std::string network_manager_service_action = "";
-
-        if (!wifi_enabled) {
-          config_command_stream << "sed -zi '/" << disable_wifi_line
-                                << "/!s/$/\\n"
-                                << disable_wifi_line << "\\n/' " << config_path;
-	  network_manager_service_action = "disable";
-        } else {
-          config_command_stream << "sed -i '/^" << disable_wifi_line << "$/d' "
-                                << config_path;
-	  network_manager_service_action = "enable";
-	}
-        std::string config_command = config_command_stream.str();
-	bm_log_info("Invoking command on config.txt: %s", config_command.c_str());
-        system(config_command.c_str());
-	std::string systemctl_action = "systemctl " + network_manager_service_action
-					     + " --now NetworkManager";
-	bm_log_info("Invoking systemctl command: %s", systemctl_action.c_str());
-        system(systemctl_action.c_str());
       }
     } else {
-      bm_log_error("Failed to decode " WIFI_ENABLED_KEY " bcmp value, err=%d",
+      bm_log_error("Failed to decode " WIFI_ENABLED_KEY
+                   " bcmp value, enabling Wi-Fi, err=%d",
                    err);
+      wifi_enabled = 1;
     }
+
+    std::string network_manager_service_action = "enable";
+    std::string wifi_enable_action = "unblock";
+
+    if (!wifi_enabled) {
+      network_manager_service_action = "disable";
+      wifi_enable_action = "block";
+    }
+
+    std::string wifi_command = "rfkill " + wifi_enable_action + " wifi";
+    bm_log_info("Invoking command for Wi-Fi radio: %s", wifi_command.c_str());
+    system(wifi_command.c_str());
+    std::string systemctl_action =
+        "systemctl " + network_manager_service_action + " --now NetworkManager";
+    bm_log_info("Invoking systemctl command: %s", systemctl_action.c_str());
+    system(systemctl_action.c_str());
   }
 
   return err;
