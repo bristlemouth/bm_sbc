@@ -8,6 +8,8 @@
 #include "messages/config.h"
 #include "messages/neighbors.h"
 #include "pubsub.h"
+#include "sys_info_service.h"
+#include "sys_info_svc_reply_msg.h"
 #include <arpa/inet.h>
 #include <cstdio>
 #include <cstdlib>
@@ -25,6 +27,8 @@
 static struct {
   uint64_t mote_node_id = 0;
   bool mote_neighbor_found = false;
+  bool mote_app_name_received = false;
+  char mote_app_name[MAX_STR_LEN_BYTES + 1] = "borealis2";
   bool sbc_command_received = false;
   bool config_map_received = false;
 } CONTEXT;
@@ -54,6 +58,8 @@ static void await_uart_neighbor(void) {
     }
   }
 }
+
+/**************** SBC command ****************/
 
 static BmErr sbc_command_reply_cb(uint8_t *payload) {
   bm_log_debug("Ticks in sbc command reply cb: %u", bm_get_tick_count());
@@ -111,6 +117,8 @@ static void get_sbc_command(void) {
     retries_remaining--;
   }
 }
+
+/**************** CBOR config map ****************/
 
 static bool write_cbor_value(FILE *fp, CborValue *value) {
   switch (cbor_value_get_type(value)) {
@@ -196,6 +204,8 @@ static bool write_init_log_file(const uint8_t *cbor_data, size_t cbor_len) {
   }
 
   bool ok = true;
+  fprintf(fp, "app: %s\r\n", CONTEXT.mote_app_name);
+
   CborValue it;
   if (cbor_value_enter_container(&map, &it) != CborNoError) {
     ok = false;
@@ -326,6 +336,79 @@ static void get_mote_system_configs(void) {
   }
 }
 
+/**************** mote app name ****************/
+
+static bool sys_info_reply_cb(bool ack, uint32_t msg_id, size_t service_strlen,
+                              const char *service, size_t reply_len,
+                              uint8_t *reply_data) {
+  (void)msg_id;
+  (void)service_strlen;
+  (void)service;
+
+  if (!ack || !reply_data) {
+    bm_log_warn("Sys info request not acknowledged");
+    return false;
+  }
+
+  SysInfoReplyData reply = {0, 0, 0, 0, NULL};
+  CborError err = sys_info_reply_decode(&reply, reply_data, reply_len);
+  if (err != CborNoError) {
+    bm_log_error("Failed to decode sys info reply, err=%d", err);
+    if (reply.app_name) {
+      bm_free(reply.app_name);
+    }
+    return false;
+  }
+
+  if (reply.app_name && reply.app_name_strlen > 0 &&
+      reply.app_name_strlen <= MAX_STR_LEN_BYTES) {
+    memcpy(CONTEXT.mote_app_name, reply.app_name, reply.app_name_strlen);
+    CONTEXT.mote_app_name[reply.app_name_strlen] = '\0';
+    CONTEXT.mote_app_name_received = true;
+    bm_log_info("Mote app name: %s", CONTEXT.mote_app_name);
+  } else {
+    bm_log_warn("Sys info reply missing or oversized app_name");
+  }
+
+  if (reply.app_name) {
+    bm_free(reply.app_name);
+  }
+  return CONTEXT.mote_app_name_received;
+}
+
+static void send_sys_info_request(void) {
+  bool sent = sys_info_service_request(CONTEXT.mote_node_id, sys_info_reply_cb,
+                                       CONFIG_MAP_REQUEST_TIMEOUT_S);
+  if (!sent) {
+    bm_log_warn("Failed to send sys info request");
+  }
+}
+
+static void wait_for_sys_info_reply(void) {
+  uint32_t total_awaited_ms = 0;
+  const uint32_t extra_padding_ms = 500;
+  const uint32_t timeout_ms =
+      CONFIG_MAP_REQUEST_TIMEOUT_S * 1000 + extra_padding_ms;
+  while (!CONTEXT.mote_app_name_received && total_awaited_ms < timeout_ms) {
+    const uint32_t delay_poll_ms = 20;
+    bm_delay(delay_poll_ms);
+    total_awaited_ms += delay_poll_ms;
+  }
+}
+
+static void get_mote_app_name(void) {
+  int8_t retries_remaining = 3;
+  while (!CONTEXT.mote_app_name_received && retries_remaining > 0) {
+    send_sys_info_request();
+    wait_for_sys_info_reply();
+    retries_remaining--;
+  }
+  if (!CONTEXT.mote_app_name_received) {
+    bm_log_warn("Could not retrieve mote app name; defaulting to '%s'",
+                CONTEXT.mote_app_name);
+  }
+}
+
 static void gprmc_callback(uint64_t node_id, const char *topic,
                            uint16_t topic_len, const uint8_t *data,
                            uint16_t data_len, uint8_t type, uint8_t version) {
@@ -339,6 +422,7 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
 void setup(void) {
   bm_sub("gps-nmea/rmc", gprmc_callback);
   await_uart_neighbor();
+  get_mote_app_name();
   get_mote_system_configs();
   get_sbc_command();
   gateway_ipc_init();
