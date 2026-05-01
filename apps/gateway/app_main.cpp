@@ -474,19 +474,37 @@ static void get_wifi_enable(void) {
 
   std::string network_manager_service_action = "enable";
   std::string wifi_enable_action = "unblock";
+  std::string wifi_driver_action = "";
+  std::string wifi_driver_dependency_command = "";
 
   if (!CONTEXT.wifi_enabled) {
     network_manager_service_action = "disable";
     wifi_enable_action = "block";
+    wifi_driver_action = "-r ";
+    wifi_driver_dependency_command = " modprobe -r brcmutil";
   }
 
+  // Disable Wi-Fi In Software
   std::string wifi_command = "rfkill " + wifi_enable_action + " wifi";
   bm_log_info("Invoking command for Wi-Fi radio: %s", wifi_command.c_str());
   system(wifi_command.c_str());
+
+  // Disable NetworkManager.service
   std::string systemctl_action =
       "systemctl " + network_manager_service_action + " --now NetworkManager";
   bm_log_info("Invoking systemctl command: %s", systemctl_action.c_str());
   system(systemctl_action.c_str());
+
+  // Disable Wi-Fi In Hardware
+  std::string wifi_driver_command =
+      "modprobe " + wifi_driver_action + "brcmfmac";
+  bm_log_info("Invoking driver command: %s", wifi_driver_command.c_str());
+  system(wifi_driver_command.c_str());
+  if (wifi_driver_dependency_command.length()) {
+    bm_log_info("Invoking driver dependency command: %s",
+                wifi_driver_dependency_command.c_str());
+    system(wifi_driver_dependency_command.c_str());
+  }
 }
 
 static void gprmc_callback(uint64_t node_id, const char *topic,
