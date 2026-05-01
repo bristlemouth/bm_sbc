@@ -14,6 +14,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <errno.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -62,8 +64,6 @@ static void await_uart_neighbor(void) {
 /**************** SBC command ****************/
 
 static BmErr sbc_command_reply_cb(uint8_t *payload) {
-  bm_log_debug("Ticks in sbc command reply cb: %u", bm_get_tick_count());
-
   BmErr err = BmENODATA;
   if (payload) {
     BmConfigValue *msg = reinterpret_cast<BmConfigValue *>(payload);
@@ -77,7 +77,14 @@ static BmErr sbc_command_reply_cb(uint8_t *payload) {
         bm_log_info("Received sbc command: %.*s", (int)sbc_command_len,
                     sbc_command);
         CONTEXT.sbc_command_received = true;
-        system(sbc_command);
+        const int status = system(sbc_command);
+        if (status == -1) {
+          bm_log_error("Failed to run sbc_command: %s", strerror(errno));
+        } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+          bm_log_error("sbc_command exited %d", WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+          bm_log_error("sbc_command killed by signal %d", WTERMSIG(status));
+        }
       }
     } else {
       bm_log_error("Failed to decode sbc command bcmp value, err=%d", err);
@@ -88,12 +95,10 @@ static BmErr sbc_command_reply_cb(uint8_t *payload) {
 }
 
 static void send_sbc_command_request(void) {
-  bm_log_debug("Ticks before bcmp config get: %u", bm_get_tick_count());
   BmErr err = BmOK;
   bool sent = bcmp_config_get(CONTEXT.mote_node_id, BM_CFG_PARTITION_SYSTEM,
                               SBC_COMMAND_KEY_LEN, SBC_COMMAND_KEY, &err,
                               sbc_command_reply_cb);
-  bm_log_debug("Ticks after bcmp config get: %u", bm_get_tick_count());
   if (!sent) {
     bm_log_warn("Failed to send bcmp config get for sbc_command, err=%d", err);
   }
