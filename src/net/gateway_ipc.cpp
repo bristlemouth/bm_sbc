@@ -1,6 +1,7 @@
 #include "gateway_ipc.h"
 
 #include "bm_log.h"
+#include "bm_os.h"
 #include "bm_service_request.h"
 #include "cbor.h"
 #include "pubsub.h"
@@ -38,13 +39,21 @@ constexpr size_t SENSOR_TOPIC_PREFIX_LEN = 7 + 16 + 1;
 // 100 ms is not expressible — use the smallest allowed value and cap total
 // attempts instead).
 constexpr uint32_t POWEROFF_TIMEOUT_S = 1;
-constexpr uint32_t POWEROFF_MAX_ATTEMPTS = 30;
-constexpr size_t POWEROFF_SERVICE_PATH_CAP = 64;
 
 int g_ipc_fd = -1;
-char g_poweroff_service[POWEROFF_SERVICE_PATH_CAP] = {0};
-size_t g_poweroff_service_len = 0;
-uint32_t g_poweroff_attempts = 0;
+
+static struct {
+  BmTaskHandle handle = NULL;
+  struct {
+    BmQueue handle = NULL;
+    const size_t count = 1;
+  } queue;
+  const char *name = "Power Off";
+  const uint32_t stack_size = 248;
+  const uint32_t priority = 1;
+  const size_t request_retry_max = 30;
+  size_t request_retry = 0;
+} power_off_task;
 
 bool cbor_get_text(const CborValue *map, const char *key, char *out,
                    size_t out_cap, size_t *out_len) {
@@ -108,51 +117,89 @@ bool cbor_get_bytes_view(const CborValue *map, const char *key,
 
 bool poweroff_reply_cb(bool ack, uint32_t msg_id, size_t, const char *, size_t,
                        uint8_t *) {
+  size_t ack_received = static_cast<size_t>(ack);
+
   if (ack) {
     bm_log_info("replay_caught_up: poweroff reply received (msg_id=%u), "
                 "running systemctl poweroff",
                 msg_id);
-    int rc = system("systemctl poweroff");
-    if (rc != 0) {
-      bm_log_error("systemctl poweroff returned %d", rc);
-    }
-    return true;
   }
 
-  // Timeout. The UART link is unreliable, so retry.
-  if (g_poweroff_attempts >= POWEROFF_MAX_ATTEMPTS) {
-    bm_log_error("replay_caught_up: poweroff request gave up after %u attempts",
-                 g_poweroff_attempts);
-    return true;
-  }
-  g_poweroff_attempts++;
-  bm_log_warn("replay_caught_up: poweroff timeout, retry %u/%u",
-              g_poweroff_attempts, POWEROFF_MAX_ATTEMPTS);
-  if (!bm_service_request(g_poweroff_service_len, g_poweroff_service, 0,
-                          nullptr, poweroff_reply_cb, POWEROFF_TIMEOUT_S)) {
-    bm_log_error("replay_caught_up: retry bm_service_request failed");
-  }
+  bm_queue_send(power_off_task.queue.handle, &ack_received, 0);
+
   return true;
+}
+
+static inline void cleanup_power_off_task(void) {
+  bm_queue_delete(power_off_task.queue.handle);
+  bm_task_delete(power_off_task.handle);
+}
+
+static void request_power_off(void *arg) {
+  constexpr size_t POWEROFF_SERVICE_PATH_CAP = 64;
+  char poweroff_service[POWEROFF_SERVICE_PATH_CAP] = {0};
+  size_t poweroff_service_len = 0;
+
+  int n = snprintf(poweroff_service, sizeof(poweroff_service),
+                   "borealis/%016" PRIx64 "/poweroff", node_id());
+  if (n < 0 || static_cast<size_t>(n) >= sizeof(poweroff_service)) {
+    bm_log_error("replay_caught_up: failed to format poweroff service path");
+    cleanup_power_off_task();
+    return;
+  }
+  poweroff_service_len = static_cast<size_t>(n);
+
+  bm_log_info("replay_caught_up: requesting %s (timeout=%us)", poweroff_service,
+              POWEROFF_TIMEOUT_S);
+
+  while (power_off_task.request_retry < power_off_task.request_retry_max) {
+    if (!bm_service_request(poweroff_service_len, poweroff_service, 0, nullptr,
+                            poweroff_reply_cb, POWEROFF_TIMEOUT_S)) {
+      bm_log_error("replay_caught_up: bm_service_request failed");
+      break;
+    }
+
+    size_t acknowledged = 0;
+    if (bm_queue_receive(power_off_task.queue.handle, &acknowledged,
+                         BM_MAX_DELAY_UINT32) != BmOK) {
+      break;
+    }
+
+    if (acknowledged) {
+      int rc = system("systemctl poweroff");
+      if (rc != 0) {
+        bm_log_error("systemctl poweroff returned %d", rc);
+      }
+      break;
+    }
+
+    power_off_task.request_retry++;
+    bm_log_warn("replay_caught_up: poweroff timeout, retry %zu/%zu",
+                power_off_task.request_retry, power_off_task.request_retry_max);
+  }
+
+  if (power_off_task.request_retry == power_off_task.request_retry_max) {
+
+    bm_log_error(
+        "replay_caught_up: poweroff request gave up after %zu attempts",
+        power_off_task.request_retry);
+  }
+
+  cleanup_power_off_task();
 }
 
 void handle_replay_caught_up(const CborValue *) {
   bm_log_info("IPC RX replay_caught_up");
 
-  int n = snprintf(g_poweroff_service, sizeof(g_poweroff_service),
-                   "borealis/%016" PRIx64 "/poweroff", node_id());
-  if (n < 0 || static_cast<size_t>(n) >= sizeof(g_poweroff_service)) {
-    bm_log_error("replay_caught_up: failed to format poweroff service path");
-    return;
-  }
-  g_poweroff_service_len = static_cast<size_t>(n);
-  g_poweroff_attempts = 1;
-
-  bm_log_info("replay_caught_up: requesting %s (timeout=%us)",
-              g_poweroff_service, POWEROFF_TIMEOUT_S);
-  if (!bm_service_request(g_poweroff_service_len, g_poweroff_service, 0,
-                          nullptr, poweroff_reply_cb, POWEROFF_TIMEOUT_S)) {
-    bm_log_error("replay_caught_up: bm_service_request failed");
-  }
+  // Reset retries and create task to handle sending service request,
+  // must offload to a task as retries cannot occur from within the
+  // reply callback
+  power_off_task.request_retry = 0;
+  power_off_task.queue.handle =
+      bm_queue_create(power_off_task.queue.count, sizeof(size_t));
+  bm_task_create(request_power_off, power_off_task.name,
+                 power_off_task.stack_size, NULL, power_off_task.priority,
+                 power_off_task.handle);
 }
 
 void handle_spotter_log(const CborValue *map) {
