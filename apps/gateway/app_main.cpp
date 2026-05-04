@@ -484,18 +484,18 @@ static void get_wifi_enable(void) {
     wifi_driver_dependency_command = " modprobe -r brcmutil";
   }
 
-  // Disable Wi-Fi In Software
+  // Configure Wi-Fi In Software
   std::string wifi_command = "rfkill " + wifi_enable_action + " wifi";
   bm_log_info("Invoking command for Wi-Fi radio: %s", wifi_command.c_str());
   system(wifi_command.c_str());
 
-  // Disable NetworkManager.service
+  // Configure NetworkManager.service
   std::string systemctl_action =
       "systemctl " + network_manager_service_action + " --now NetworkManager";
   bm_log_info("Invoking systemctl command: %s", systemctl_action.c_str());
   system(systemctl_action.c_str());
 
-  // Disable Wi-Fi In Hardware
+  // Configure Wi-Fi Hardware
   std::string wifi_driver_command =
       "modprobe " + wifi_driver_action + "brcmfmac";
   bm_log_info("Invoking driver command: %s", wifi_driver_command.c_str());
