@@ -135,6 +135,8 @@ bool poweroff_reply_cb(bool ack, uint32_t msg_id, size_t, const char *, size_t,
 static inline void cleanup_power_off_task(void) {
   bm_queue_delete(power_off_task.queue.handle);
   bm_task_delete(power_off_task.handle);
+  power_off_task.queue.handle = NULL;
+  power_off_task.handle = NULL;
 }
 
 static void request_power_off(void *arg) {
@@ -168,8 +170,10 @@ static void request_power_off(void *arg) {
     }
 
     size_t acknowledged = 0;
+    size_t timeout_ms = (POWEROFF_TIMEOUT_S + POWEROFF_TIMEOUT_S) * 1000;
     if (bm_queue_receive(power_off_task.queue.handle, &acknowledged,
-                         BM_MAX_DELAY_UINT32) != BmOK) {
+                         timeout_ms) != BmOK) {
+      bm_log_error("replay_caught_up: bm_queue_receive failed");
       break;
     }
 
@@ -177,8 +181,9 @@ static void request_power_off(void *arg) {
       int rc = system("systemctl poweroff");
       if (rc != 0) {
         bm_log_error("systemctl poweroff returned %d", rc);
+      } else {
+        break;
       }
-      break;
     }
 
     power_off_task.request_retry++;
@@ -196,6 +201,11 @@ static void request_power_off(void *arg) {
 
 void handle_replay_caught_up(const CborValue *) {
   bm_log_info("IPC RX replay_caught_up");
+
+  // A replay event is already being handled
+  if (power_off_task.queue.handle || power_off_task.handle) {
+    return;
+  }
 
   // Reset retries and create task to handle sending service request,
   // must offload to a task as retries cannot occur from within the
