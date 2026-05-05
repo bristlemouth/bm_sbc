@@ -155,6 +155,12 @@ static void request_power_off(void *arg) {
               POWEROFF_TIMEOUT_S);
 
   while (power_off_task.request_retry <= power_off_task.request_retry_max) {
+    if (power_off_task.request_retry) {
+      bm_log_warn("replay_caught_up: poweroff timeout, retry %zu/%zu",
+                  power_off_task.request_retry,
+                  power_off_task.request_retry_max);
+    }
+
     if (!bm_service_request(poweroff_service_len, poweroff_service, 0, nullptr,
                             poweroff_reply_cb, POWEROFF_TIMEOUT_S)) {
       bm_log_error("replay_caught_up: bm_service_request failed");
@@ -176,8 +182,6 @@ static void request_power_off(void *arg) {
     }
 
     power_off_task.request_retry++;
-    bm_log_warn("replay_caught_up: poweroff timeout, retry %zu/%zu",
-                power_off_task.request_retry, power_off_task.request_retry_max);
   }
 
   if (power_off_task.request_retry > power_off_task.request_retry_max) {
