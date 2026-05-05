@@ -4,6 +4,7 @@
 #include "gateway_device.h"
 #include "pcap_file_sink.h"
 #include "platform_linux.h"
+#include "timer_callback_handler.h"
 #include "uart_l2_transport.h"
 #include "virtual_port_device.h"
 // topology.h, bm_service.h, l2.h, pubsub.h have extern "C" guards.
@@ -93,9 +94,8 @@ static int parse_log_level(const char *s) {
 static int load_init_file(const char *path, VirtualPortCfg *vpc,
                           bool *node_id_set, char *cfg_dir, size_t cfg_dir_sz,
                           char *uart_path, size_t uart_path_sz, int *baud_rate,
-                          char *pcap_path, size_t pcap_path_sz,
-                          char *log_dir, size_t log_dir_sz,
-                          int *log_level, bool *log_stdout) {
+                          char *pcap_path, size_t pcap_path_sz, char *log_dir,
+                          size_t log_dir_sz, int *log_level, bool *log_stdout) {
   toml_result_t res = toml_parse_file_ex(path);
   if (!res.ok) {
     fprintf(stderr, "bm_sbc: TOML parse error in %s: %s\n", path, res.errmsg);
@@ -250,11 +250,14 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   // Seed log vars from environment variables; CLI flags and TOML will override.
   {
     const char *env = getenv("BM_SBC_LOG_DIR");
-    if (env) strncpy(log_dir, env, sizeof(log_dir) - 1);
+    if (env)
+      strncpy(log_dir, env, sizeof(log_dir) - 1);
     env = getenv("BM_SBC_LOG_LEVEL");
-    if (env) log_level = parse_log_level(env); // -1 if unrecognised
+    if (env)
+      log_level = parse_log_level(env); // -1 if unrecognised
     env = getenv("BM_SBC_LOG_STDOUT");
-    if (env && strcmp(env, "1") == 0) log_stdout_flag = true;
+    if (env && strcmp(env, "1") == 0)
+      log_stdout_flag = true;
   }
 
   static const struct option long_opts[] = {
@@ -391,9 +394,8 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
 
     int rc = load_init_file(init_path, &vpc, &node_id_set, cfg_dir,
                             sizeof(cfg_dir), uart_path, sizeof(uart_path),
-                            &baud_rate, pcap_path, sizeof(pcap_path),
-                            log_dir, sizeof(log_dir),
-                            &log_level, &log_stdout_flag);
+                            &baud_rate, pcap_path, sizeof(pcap_path), log_dir,
+                            sizeof(log_dir), &log_level, &log_stdout_flag);
     if (rc != 0) {
       return rc;
     }
@@ -514,6 +516,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     bm_log_info("pcap capture -> %s", pcap_path);
   }
 
+  bm_err_check(err, timer_callback_handler_init());
   bm_err_check(err, bm_ip_init());
   bm_err_check(err, bcmp_init(net_dev));
   uint8_t total_ports = net_dev.trait->num_ports();
