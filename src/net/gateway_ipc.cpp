@@ -123,6 +123,8 @@ bool poweroff_reply_cb(bool ack, uint32_t msg_id, size_t, const char *, size_t,
     bm_log_info("replay_caught_up: poweroff reply received (msg_id=%u), "
                 "running systemctl poweroff",
                 msg_id);
+  } else {
+    bm_log_info("replay_caught_up: poweroff reply timeout (msg_id=%u)", msg_id);
   }
 
   bm_queue_send(power_off_task.queue.handle, &ack_received, 0);
