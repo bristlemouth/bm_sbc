@@ -1,15 +1,11 @@
 #include "gateway_device.h"
-#include "bm_link_heartbeat_monitor.h"
 #include "bm_log.h"
+#include "messages/neighbors.h"
 #include "uart_l2_transport.h"
 #include "virtual_port_device.h"
 
 #include <stdio.h>
 #include <string.h>
-
-// ---------------------------------------------------------------------------
-// Module state
-// ---------------------------------------------------------------------------
 
 /// The gateway wraps an existing VPD device and adds a UART port.
 /// VPD owns ports 1..vpd_ports; UART is vpd_ports + 1 (== GATEWAY_UART_PORT).
@@ -18,25 +14,6 @@ static struct {
   uint8_t vpd_ports; ///< Number of VPD ports (cached).
   uint8_t uart_port; ///< Port number for the UART link.
 } s_gw;
-
-// ---------------------------------------------------------------------------
-// Heartbeat-driven link-state monitor for the UART port
-// ---------------------------------------------------------------------------
-
-static void gw_heartbeat_link_change_cb(uint8_t port_idx, bool up, void *ctx) {
-  (void)ctx;
-  // The monitor is configured with num_ports == uart_port so it covers the
-  // UART slot, but we only observe() frames on the UART. Lower port indices
-  // are never refreshed and would fire spurious initial timeout events; drop
-  // them here so VPD's own link signaling is undisturbed.
-  if (port_idx != s_gw.uart_port - 1) {
-    return;
-  }
-  bm_log_info("UART link %s (port %u)", up ? "up" : "down", port_idx + 1);
-  if (s_gw.vpd.callbacks && s_gw.vpd.callbacks->link_change) {
-    s_gw.vpd.callbacks->link_change(port_idx, up);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Trait implementation
@@ -79,28 +56,22 @@ static BmErr gw_enable(void *self) {
   (void)self;
   // Enable the VPD; UART is already running (started in transport_init).
   BmErr err = s_gw.vpd.trait->enable(s_gw.vpd.self);
-  if (err != BmOK) {
-    return err;
+  if (err == BmOK) {
+    // Signal link-up for the UART port.
+    // link_change expects a 0-based port index; uart_port is 1-based,
+    // so pass uart_port - 1.
+    if (s_gw.vpd.callbacks->link_change) {
+      s_gw.vpd.callbacks->link_change(s_gw.uart_port - 1, true);
+    }
   }
-  // Drive UART link state from observed BCMP heartbeats. With
-  // start_ports_up=true, init fires a synchronous up edge for each port
-  // so bm_l2 doesn't gate heartbeat TX at boot — both peers can then
-  // converge on real heartbeats. Subsequent transitions (down at
-  // timeout, up on recovery) flow through gw_heartbeat_link_change_cb.
-  BmLinkHeartbeatMonitorCfg cfg = {
-      .num_ports = s_gw.uart_port,
-      .timeout_ms = 20000,
-      .check_period_ms = 1000,
-      .start_ports_up = true,
-      .on_link_change = gw_heartbeat_link_change_cb,
-      .ctx = nullptr,
-  };
-  return bm_link_heartbeat_monitor_init(&cfg);
+  return err;
 }
 
 static BmErr gw_disable(void *self) {
   (void)self;
-  bm_link_heartbeat_monitor_deinit();
+  if (s_gw.vpd.callbacks->link_change) {
+    s_gw.vpd.callbacks->link_change(s_gw.uart_port - 1, false);
+  }
   uart_l2_transport_deinit();
   return s_gw.vpd.trait->disable(s_gw.vpd.self);
 }
@@ -164,6 +135,16 @@ static const NetworkDeviceTrait s_gw_trait = {
     gw_num_ports,   gw_port_stats,   gw_handle_interrupt,
 };
 
+static void gw_neighbor_discovery_cb(bool up, BcmpNeighbor *neighbor) {
+  if (neighbor == NULL || neighbor->port != s_gw.uart_port) {
+    return;
+  }
+  bm_log_info("UART link %s (port %u)", up ? "up" : "down", neighbor->port);
+  if (s_gw.vpd.callbacks && s_gw.vpd.callbacks->link_change) {
+    s_gw.vpd.callbacks->link_change(neighbor->port - 1, up);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -176,6 +157,10 @@ NetworkDevice gateway_device_get(NetworkDevice *vpd_dev) {
                        ? (uint8_t)(MAX_TOTAL_PORTS - 1)
                        : raw_vpd_ports;
   s_gw.uart_port = s_gw.vpd_ports + 1;
+
+  // Register a callback for when neighbors appear and disappear
+  // and use it to tell L2 that the link is up/down.
+  bcmp_neighbor_register_discovery_callback(gw_neighbor_discovery_cb);
 
   // Share the VPD's internal callbacks struct with the gateway device so
   // that when bm_l2_init populates receive/link_change, those pointers
@@ -190,13 +175,7 @@ NetworkDevice gateway_device_get(NetworkDevice *vpd_dev) {
 
 void gateway_uart_rx_cb(const uint8_t *frame, size_t len, void *ctx) {
   (void)ctx;
-  if (len == 0) {
-    return;
-  }
-  // Feed the heartbeat monitor; it parses BCMP heartbeats out of the frame
-  // and drives the UART port's link state via gw_heartbeat_link_change_cb.
-  bm_link_heartbeat_monitor_observe(s_gw.uart_port, frame, (uint32_t)len);
-  if (s_gw.vpd.callbacks->receive) {
+  if (s_gw.vpd.callbacks->receive && len > 0) {
     // Deliver the UART frame to the stack as arriving on the UART port.
     // The receive callback expects a non-const pointer (legacy API).
     s_gw.vpd.callbacks->receive(s_gw.uart_port, (uint8_t *)frame, len);
