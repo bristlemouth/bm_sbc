@@ -4,6 +4,7 @@
 #include "gateway_device.h"
 #include "pcap_file_sink.h"
 #include "platform_linux.h"
+#include "raw_eth_device.h"
 #include "timer_callback_handler.h"
 #include "uart_l2_transport.h"
 #include "virtual_port_device.h"
@@ -25,6 +26,7 @@ extern "C" {
 #include "git_sha.h"
 #include "tomlc17.h"
 #include <getopt.h>
+#include <net/if.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +44,8 @@ static const char *k_usage =
     "  --socket-dir <path>    Unix socket directory (default: /tmp).\n"
     "  --uart       <device>  Serial device path for UART gateway mode.\n"
     "  --baud       <rate>    Baud rate for UART (default: 115200).\n"
+    "  --eth0       <iface>   Network interface for ADIN2111 port 1 (raw Ethernet mode).\n"
+    "  --eth1       <iface>   Network interface for ADIN2111 port 2 (optional).\n"
     "  --pcap       <path>    Write captured L2 frames to a pcap file.\n"
     "\n"
     "  --log-dir    <path>    Log file directory (default: /var/log/bm_sbc).\n"
@@ -95,7 +99,9 @@ static int load_init_file(const char *path, VirtualPortCfg *vpc,
                           bool *node_id_set, char *cfg_dir, size_t cfg_dir_sz,
                           char *uart_path, size_t uart_path_sz, int *baud_rate,
                           char *pcap_path, size_t pcap_path_sz, char *log_dir,
-                          size_t log_dir_sz, int *log_level, bool *log_stdout) {
+                          size_t log_dir_sz, int *log_level, bool *log_stdout,
+                          char *eth0_iface, size_t eth0_sz,
+                          char *eth1_iface, size_t eth1_sz) {
   toml_result_t res = toml_parse_file_ex(path);
   if (!res.ok) {
     fprintf(stderr, "bm_sbc: TOML parse error in %s: %s\n", path, res.errmsg);
@@ -193,6 +199,20 @@ static int load_init_file(const char *path, VirtualPortCfg *vpc,
     *log_stdout = d.u.boolean;
   }
 
+  // eth0-iface (string)
+  d = toml_get(root, "eth0-iface");
+  if (d.type == TOML_STRING) {
+    strncpy(eth0_iface, d.u.s, eth0_sz - 1);
+    eth0_iface[eth0_sz - 1] = '\0';
+  }
+
+  // eth1-iface (string)
+  d = toml_get(root, "eth1-iface");
+  if (d.type == TOML_STRING) {
+    strncpy(eth1_iface, d.u.s, eth1_sz - 1);
+    eth1_iface[eth1_sz - 1] = '\0';
+  }
+
   toml_free(res);
   return 0;
 }
@@ -242,6 +262,8 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   char uart_path[128] = {0};
   char pcap_path[256] = {0};
   int baud_rate = 115200;
+  char eth0_iface[IFNAMSIZ] = {0};
+  char eth1_iface[IFNAMSIZ] = {0};
   char init_path[512] = {0};
   char log_dir[256] = {0};
   int log_level = -1; // -1 = not set
@@ -268,6 +290,8 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
       {"socket-dir", required_argument, NULL, 's'},
       {"uart", required_argument, NULL, 'u'},
       {"baud", required_argument, NULL, 'b'},
+      {"eth0", required_argument, NULL, 'e'},
+      {"eth1", required_argument, NULL, 'E'},
       {"pcap", required_argument, NULL, 'w'},
       {"log-dir", required_argument, NULL, 'd'},
       {"log-level", required_argument, NULL, 'l'},
@@ -328,6 +352,14 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
       }
       break;
     }
+    case 'e': {
+      strncpy(eth0_iface, optarg, sizeof(eth0_iface) - 1);
+      break;
+    }
+    case 'E': {
+      strncpy(eth1_iface, optarg, sizeof(eth1_iface) - 1);
+      break;
+    }
     case 'w': {
       strncpy(pcap_path, optarg, sizeof(pcap_path) - 1);
       break;
@@ -372,6 +404,10 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     char cli_uart_path[128];
     strncpy(cli_uart_path, uart_path, sizeof(cli_uart_path));
     int cli_baud_rate = baud_rate;
+    char cli_eth0_iface[IFNAMSIZ];
+    strncpy(cli_eth0_iface, eth0_iface, sizeof(cli_eth0_iface));
+    char cli_eth1_iface[IFNAMSIZ];
+    strncpy(cli_eth1_iface, eth1_iface, sizeof(cli_eth1_iface));
     char cli_pcap_path[256];
     strncpy(cli_pcap_path, pcap_path, sizeof(cli_pcap_path));
     char cli_log_dir[256];
@@ -388,6 +424,8 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     memset(uart_path, 0, sizeof(uart_path));
     memset(pcap_path, 0, sizeof(pcap_path));
     baud_rate = 115200;
+    memset(eth0_iface, 0, sizeof(eth0_iface));
+    memset(eth1_iface, 0, sizeof(eth1_iface));
     memset(log_dir, 0, sizeof(log_dir));
     log_level = -1;
     log_stdout_flag = false;
@@ -395,7 +433,9 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     int rc = load_init_file(init_path, &vpc, &node_id_set, cfg_dir,
                             sizeof(cfg_dir), uart_path, sizeof(uart_path),
                             &baud_rate, pcap_path, sizeof(pcap_path), log_dir,
-                            sizeof(log_dir), &log_level, &log_stdout_flag);
+                            sizeof(log_dir), &log_level, &log_stdout_flag,
+                            eth0_iface, sizeof(eth0_iface),
+                            eth1_iface, sizeof(eth1_iface));
     if (rc != 0) {
       return rc;
     }
@@ -433,6 +473,12 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     if (cli_log_stdout_flag) {
       log_stdout_flag = true;
     }
+    if (cli_eth0_iface[0] != '\0') {
+      strncpy(eth0_iface, cli_eth0_iface, sizeof(eth0_iface) - 1);
+    }
+    if (cli_eth1_iface[0] != '\0') {
+      strncpy(eth1_iface, cli_eth1_iface, sizeof(eth1_iface) - 1);
+    }
   }
 
   if (!node_id_set) {
@@ -460,9 +506,20 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
 
   // --- First structured log line ------------------------------------------
   bool gateway_mode = (uart_path[0] != '\0');
-  bm_log_info("node_id=0x%016" PRIx64 " peers=%u socket_dir=%s%s%s",
-              vpc.own_node_id, (unsigned)vpc.num_peers, vpc.socket_dir,
-              gateway_mode ? " uart=" : "", gateway_mode ? uart_path : "");
+  bool eth_mode = (eth0_iface[0] != '\0');
+  if (gateway_mode && eth_mode) {
+    fprintf(stderr, "bm_sbc: --uart and --eth0 are mutually exclusive\n");
+    return 1;
+  }
+  if (eth_mode) {
+    bm_log_info("node_id=0x%016" PRIx64 " eth0=%s%s%s", vpc.own_node_id,
+                eth0_iface, eth1_iface[0] ? " eth1=" : "",
+                eth1_iface[0] ? eth1_iface : "");
+  } else {
+    bm_log_info("node_id=0x%016" PRIx64 " peers=%u socket_dir=%s%s%s",
+                vpc.own_node_id, (unsigned)vpc.num_peers, vpc.socket_dir,
+                gateway_mode ? " uart=" : "", gateway_mode ? uart_path : "");
+  }
 
   // --- device_init --------------------------------------------------------
   // Build the version string in the same format as bm_protocol embedded
@@ -485,12 +542,12 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   dev_cfg.ver_patch = BM_SBC_VERSION_PATCH;
   device_init(dev_cfg);
 
-  // --- VirtualPortDevice setup ------------------------------------------
-  NetworkDevice vpd_dev = virtual_port_device_get(&vpc);
+  // --- Network device setup ---------------------------------------------
   NetworkDevice net_dev;
 
   if (gateway_mode) {
     // Gateway mode: composite device wrapping VPD + UART.
+    NetworkDevice vpd_dev = virtual_port_device_get(&vpc);
     int uart_err = uart_l2_transport_init(uart_path, baud_rate,
                                           gateway_uart_rx_cb, nullptr);
     if (uart_err != 0) {
@@ -498,8 +555,22 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
       return 1;
     }
     net_dev = gateway_device_get(&vpd_dev);
+  } else if (eth_mode) {
+    // Raw Ethernet mode: ADIN2111 exposed as Linux network interfaces.
+    RawEthDeviceCfg eth_cfg;
+    memset(&eth_cfg, 0, sizeof(eth_cfg));
+    strncpy(eth_cfg.ports[0].iface_name, eth0_iface,
+            sizeof(eth_cfg.ports[0].iface_name) - 1);
+    eth_cfg.num_ports = 1;
+    if (eth1_iface[0] != '\0') {
+      strncpy(eth_cfg.ports[1].iface_name, eth1_iface,
+              sizeof(eth_cfg.ports[1].iface_name) - 1);
+      eth_cfg.num_ports = 2;
+    }
+    net_dev = raw_eth_device_get(&eth_cfg);
   } else {
     // Normal mode: VPD only.
+    NetworkDevice vpd_dev = virtual_port_device_get(&vpc);
     net_dev = vpd_dev;
   }
 
