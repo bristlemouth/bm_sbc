@@ -11,6 +11,19 @@
 #include <termios.h>
 #include <unistd.h>
 
+// Darwin's termios.h doesn't define these baud rates, return B0, unsupported
+#ifndef B1000000
+#define B1000000 B0
+#endif
+
+#ifndef B1500000
+#define B1500000 B0
+#endif
+
+#ifndef B2000000
+#define B2000000 B0
+#endif
+
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
