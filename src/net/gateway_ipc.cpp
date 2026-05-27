@@ -158,7 +158,10 @@ static inline void run_command_get_output(const std::string &cmd,
 
 static inline void wait_for_hydrotwin(void) {
   // Stop cobs_to_shm
-  system("systemctl stop cobs_to_shm");
+  const std::string cobs_to_shm = "cobs_to_shm";
+  const std::string disable_cobs_to_shm = "systemctl stop " + cobs_to_shm;
+  bm_log_info("%s: disabling %s", __func__, cobs_to_shm);
+  system(disable_cobs_to_shm.c_str());
 
   const std::string service_name = "hydrotwind.service";
   const std::string service_active = "systemctl is-active " + service_name;
