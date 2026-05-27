@@ -155,6 +155,8 @@ static inline void run_command_get_output(const std::string &cmd,
   bm_log_info("%s: command - %s returned %d", __func__, cmd.c_str(), err);
   if (!err) {
     fgets(buf.data(), buf.size(), fp);
+    // Strip newline if it exists
+    buf.data()[strcspn(buf.data(), "\n")] = '\0';
   }
   pclose(fp);
 }
@@ -162,8 +164,10 @@ static inline void run_command_get_output(const std::string &cmd,
 static inline void wait_for_hydrotwin(void) {
   // Stop cobs_to_shm
   const std::string cobs_to_shm = "cobs_to_shm";
-  const std::string disable_cobs_to_shm = "systemctl stop " + cobs_to_shm;
-  bm_log_info("%s: disabling %s, %s", __func__, cobs_to_shm.c_str(), disable_cobs_to_shm.c_str());
+  const std::string disable_cobs_to_shm =
+      "systemctl stop " + cobs_to_shm + ".service";
+  bm_log_info("%s: disabling %s, %s", __func__, cobs_to_shm.c_str(),
+              disable_cobs_to_shm.c_str());
   system(disable_cobs_to_shm.c_str());
 
   const std::string service_name = "hydrotwind.service";
@@ -194,7 +198,10 @@ static inline void wait_for_hydrotwin(void) {
     // Set exited based on the output of the command
     p = buf.data();
     bm_log_info("%s: hydrotwin service returned - %s", __func__, p);
-    sscanf(p, "%s=%d", const_cast<char *>(property.c_str()), &exited_code);
+    const char *eq = strchr(buf.data(), '=');
+    if (eq) {
+      exited_code = atoi(eq + 1);
+    }
   }
 }
 
