@@ -529,7 +529,7 @@ void setup(void) {
   get_mote_system_configs();
   get_sbc_command();
   get_wifi_enable();
-  gateway_ipc_init();
+  gateway_ipc_init(CONTEXT.mote_node_id);
 }
 
 void loop(void) { gateway_ipc_poll(); }

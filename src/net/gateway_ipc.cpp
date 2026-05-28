@@ -4,6 +4,7 @@
 #include "bm_os.h"
 #include "bm_service_request.h"
 #include "cbor.h"
+#include "messages/config.h"
 #include "pubsub.h"
 #include "spotter.h"
 extern "C" {
@@ -41,6 +42,7 @@ constexpr size_t SENSOR_TOPIC_PREFIX_LEN = 7 + 16 + 1;
 constexpr uint32_t POWEROFF_TIMEOUT_S = 1;
 
 int g_ipc_fd = -1;
+uint64_t mote_node_id = 0;
 
 static struct {
   BmTaskHandle handle = NULL;
@@ -313,6 +315,93 @@ void handle_sensor_data(const CborValue *map) {
   }
 }
 
+bool apply_config_string(const char *key, size_t key_len, const CborValue *v) {
+  char value[MAX_STR_LEN_BYTES + 1] = {0};
+  size_t cap = sizeof(value) - 1;
+  if (cbor_value_copy_text_string(v, value, &cap, nullptr) != CborNoError) {
+    bm_log_warn("IPC config_set: failed to read string value");
+    return false;
+  }
+  value[cap] = '\0';
+  bm_log_info("IPC config_set key='%s' value(str)='%s'", key, value);
+  return set_config_string(BM_CFG_PARTITION_SYSTEM, key, key_len, value, cap);
+}
+
+bool apply_config_uint(const char *key, size_t key_len, const CborValue *v) {
+  uint64_t u = 0;
+  cbor_value_get_uint64(v, &u);
+  if (u > UINT32_MAX) {
+    bm_log_warn("IPC config_set: uint value %" PRIu64 " out of range", u);
+    return false;
+  }
+  bm_log_info("IPC config_set key='%s' value(uint)=%" PRIu64, key, u);
+  return set_config_uint(BM_CFG_PARTITION_SYSTEM, key, key_len,
+                         static_cast<uint32_t>(u));
+}
+
+bool apply_config_int(const char *key, size_t key_len, const CborValue *v) {
+  int64_t i = 0;
+  cbor_value_get_int64(v, &i);
+  if (i < INT32_MIN || i > INT32_MAX) {
+    bm_log_warn("IPC config_set: int value %" PRId64 " out of range", i);
+    return false;
+  }
+  bm_log_info("IPC config_set key='%s' value(int)=%" PRId64, key, i);
+  return set_config_int(BM_CFG_PARTITION_SYSTEM, key, key_len,
+                        static_cast<int32_t>(i));
+}
+
+bool apply_config_float(const char *key, size_t key_len, const CborValue *v) {
+  double d = 0.0;
+  if (cbor_value_is_double(v)) {
+    cbor_value_get_double(v, &d);
+  } else {
+    float f = 0.0f;
+    cbor_value_get_float(v, &f);
+    d = f;
+  }
+  bm_log_info("IPC config_set key='%s' value(float)=%f", key, d);
+  return set_config_float(BM_CFG_PARTITION_SYSTEM, key, key_len,
+                          static_cast<float>(d));
+}
+
+void handle_config_set(const CborValue *map) {
+  bm_log_info("IPC RX config_set");
+
+  char key[MAX_KEY_LEN_BYTES + 1] = {0};
+  size_t key_len = 0;
+  if (!cbor_get_text(map, "config_key", key, sizeof(key), &key_len) ||
+      key_len == 0) {
+    bm_log_warn("IPC config_set: missing/empty config_key");
+    return;
+  }
+
+  CborValue v;
+  if (cbor_value_map_find_value(map, "config_value", &v) != CborNoError ||
+      cbor_value_get_type(&v) == CborInvalidType) {
+    bm_log_warn("IPC config_set: missing config_value");
+    return;
+  }
+
+  bool ok;
+  if (cbor_value_is_text_string(&v)) {
+    ok = apply_config_string(key, key_len, &v);
+  } else if (cbor_value_is_unsigned_integer(&v)) {
+    ok = apply_config_uint(key, key_len, &v);
+  } else if (cbor_value_is_integer(&v)) {
+    ok = apply_config_int(key, key_len, &v);
+  } else if (cbor_value_is_double(&v) || cbor_value_is_float(&v)) {
+    ok = apply_config_float(key, key_len, &v);
+  } else {
+    bm_log_warn("IPC config_set: unsupported config_value CBOR type");
+    return;
+  }
+
+  if (!ok) {
+    bm_log_warn("IPC config_set: write failed for key='%s'", key);
+  }
+}
+
 void dispatch(const uint8_t *buf, size_t len) {
   CborParser parser;
   CborValue root;
@@ -351,6 +440,8 @@ void dispatch(const uint8_t *buf, size_t len) {
     handle_spotter_tx(&root);
   } else if (strcmp(type, "sensor_data") == 0) {
     handle_sensor_data(&root);
+  } else if (strcmp(type, "config_set") == 0) {
+    handle_config_set(&root);
   } else {
     bm_log_warn("IPC: unknown type '%s'", type);
   }
@@ -358,7 +449,9 @@ void dispatch(const uint8_t *buf, size_t len) {
 
 } // namespace
 
-int gateway_ipc_init(void) {
+int gateway_ipc_init(uint64_t mote_node_id_arg) {
+  mote_node_id = mote_node_id_arg;
+
   if (g_ipc_fd >= 0) {
     return 0;
   }
