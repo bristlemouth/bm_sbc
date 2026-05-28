@@ -26,6 +26,7 @@ __all__ = [
     "DEFAULT_SOCKET_PATH",
     "SCHEMA_VERSION",
     "Client",
+    "config_set",
     "replay_caught_up",
     "sensor_data",
     "spotter_log",
@@ -86,6 +87,16 @@ class Client:
             msg["iridium_fallback"] = iridium_fallback
         self._send(msg)
 
+    def config_set(self, config_key: str, config_value: Any) -> None:
+        # The gateway dispatches on the CBOR wire type of config_value
+        # (text → STR, uint → UINT32, neg int → INT32, float → FLOAT),
+        # so just pass the native Python value.
+        self._send({
+            "type": "config_set",
+            "config_key": config_key,
+            "config_value": config_value,
+        })
+
     def sensor_data(self, topic_suffix: str, data: bytes) -> None:
         if topic_suffix.startswith("/"):
             raise ValueError(
@@ -124,3 +135,7 @@ def spotter_tx(data: bytes, iridium_fallback: Optional[bool] = None) -> None:
 
 def sensor_data(topic_suffix: str, data: bytes) -> None:
     _default_client().sensor_data(topic_suffix, data)
+
+
+def config_set(config_key: str, config_value: Any) -> None:
+    _default_client().config_set(config_key, config_value)

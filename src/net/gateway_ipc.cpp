@@ -415,8 +415,8 @@ void handle_config_set(const CborValue *map) {
     return;
   }
 
+  // Per-type helpers already logged the specific failure reason.
   if (!ok) {
-    bm_log_warn("IPC config_set: write failed for key='%s'", key);
     return;
   }
 
