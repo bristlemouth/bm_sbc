@@ -315,8 +315,26 @@ void handle_sensor_data(const CborValue *map) {
   }
 }
 
+// A stored text string is CBOR-encoded into MAX_CONFIG_BUFFER_SIZE_BYTES
+// with a 1–3 byte length prefix. For payloads <= 255 bytes the prefix is
+// 2 bytes, so the usable string length is bounded below the buffer size.
+// (Without this check set_config_string silently fails for strings near
+// MAX_STR_LEN_BYTES because cbor_encode_text_string overflows the buffer.)
+constexpr size_t MAX_IPC_CONFIG_STR_BYTES = MAX_CONFIG_BUFFER_SIZE_BYTES - 2;
+
 bool apply_config_string(const char *key, size_t key_len, const CborValue *v) {
-  char value[MAX_STR_LEN_BYTES + 1] = {0};
+  size_t str_len = 0;
+  if (cbor_value_get_string_length(v, &str_len) != CborNoError) {
+    bm_log_warn("IPC config_set: failed to read string length");
+    return false;
+  }
+  if (str_len > MAX_IPC_CONFIG_STR_BYTES) {
+    bm_log_warn(
+        "IPC config_set: string value too long (max %zu bytes, got %zu)",
+        MAX_IPC_CONFIG_STR_BYTES, str_len);
+    return false;
+  }
+  char value[MAX_IPC_CONFIG_STR_BYTES + 1] = {0};
   size_t cap = sizeof(value) - 1;
   if (cbor_value_copy_text_string(v, value, &cap, nullptr) != CborNoError) {
     bm_log_warn("IPC config_set: failed to read string value");
@@ -399,6 +417,11 @@ void handle_config_set(const CborValue *map) {
 
   if (!ok) {
     bm_log_warn("IPC config_set: write failed for key='%s'", key);
+    return;
+  }
+
+  if (!save_config(BM_CFG_PARTITION_SYSTEM, false)) {
+    bm_log_warn("IPC config_set: save_config failed for key='%s'", key);
   }
 }
 
