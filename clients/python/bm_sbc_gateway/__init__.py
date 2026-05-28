@@ -1,17 +1,25 @@
 """Fire-and-forget client for the bm_sbc_gateway IPC socket.
 
 The gateway binds a Unix-domain `SOCK_DGRAM` listener at
-`/run/bm_sbc/gateway_ipc.sock` and accepts CBOR-encoded datagrams matching
-the v1 schema documented in the gateway app. This module wraps each supported
-message type as a single function call.
+`/run/bm_sbc/gateway_ipc.sock` and accepts CBOR-encoded datagrams
+matching the v1 schema documented in `docs/gateway-ipc.md`.
+This module wraps each supported message type as a single function call.
 
 Example::
 
-    from bm_sbc_gateway import sensor_data, spotter_tx, spotter_log
+    from bm_sbc_gateway import (
+        config_set,
+        replay_caught_up,
+        sensor_data,
+        spotter_log,
+        spotter_tx,
+    )
 
     sensor_data("temperature", cbor2.dumps({"t_c": 21.4}))
     spotter_tx(payload_bytes, iridium_fallback=True)
     spotter_log("boot complete", file_name="system.log", print_timestamp=True)
+    config_set("wifi_ssid", "mynet")
+    replay_caught_up()
 """
 
 from __future__ import annotations
@@ -40,8 +48,9 @@ SCHEMA_VERSION = 1
 class Client:
     """Reusable client holding a connected `SOCK_DGRAM` socket.
 
-    Prefer a single `Client` instance over the module-level helpers when
-    sending many messages — it avoids re-opening the socket every call.
+    Prefer a single `Client` instance over the module-level helpers
+    when sending many messages —
+    it avoids re-opening the socket every call.
     """
 
     def __init__(self, socket_path: str = DEFAULT_SOCKET_PATH) -> None:
@@ -49,6 +58,7 @@ class Client:
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 
     def close(self) -> None:
+        """Close the underlying socket."""
         self._sock.close()
 
     def __enter__(self) -> "Client":
@@ -62,6 +72,7 @@ class Client:
         self._sock.sendto(cbor2.dumps(message), self._path)
 
     def replay_caught_up(self) -> None:
+        """Signal that the upstream replay has caught up."""
         self._send({"type": "replay_caught_up"})
 
     def spotter_log(
@@ -70,6 +81,11 @@ class Client:
         file_name: Optional[str] = None,
         print_timestamp: Optional[bool] = None,
     ) -> None:
+        """Append a line to a Spotter log, either SD card file or console.
+
+        `data` is bounded by the gateway at 1024 bytes.
+        `file_name` is bounded at 63 bytes; omit it for the console log.
+        """
         msg: dict[str, Any] = {"type": "spotter_log", "data": data}
         if file_name is not None:
             msg["file_name"] = file_name
@@ -82,22 +98,38 @@ class Client:
         data: bytes,
         iridium_fallback: Optional[bool] = None,
     ) -> None:
+        """Transmit a payload over the Spotter cell/satellite link.
+
+        `iridium_fallback=True` enables Iridium fallback on top of cellular;
+        omit (or `False`) for cellular-only.
+        """
         msg: dict[str, Any] = {"type": "spotter_tx", "data": data}
         if iridium_fallback is not None:
             msg["iridium_fallback"] = iridium_fallback
         self._send(msg)
 
     def config_set(self, config_key: str, config_value: Any) -> None:
-        # The gateway dispatches on the CBOR wire type of config_value
-        # (text → STR, uint → UINT32, neg int → INT32, float → FLOAT),
-        # so just pass the native Python value.
-        self._send({
-            "type": "config_set",
-            "config_key": config_key,
-            "config_value": config_value,
-        })
+        """Write a key-value pair into the local system config partition.
+
+        The gateway infers the stored type from the CBOR wire type of `config_value`:
+        text → STR, unsigned int → UINT32, negative int → INT32, float/double → FLOAT.
+        Strings are capped at 48 bytes by the gateway.
+        """
+        self._send(
+            {
+                "type": "config_set",
+                "config_key": config_key,
+                "config_value": config_value,
+            }
+        )
 
     def sensor_data(self, topic_suffix: str, data: bytes) -> None:
+        """Publish sensor data on the Bristlemouth pub-sub network.
+
+        Published topic is `sensor/<node_id_hex16>/<topic_suffix>`.
+        `topic_suffix` must not begin with `/`;
+        the gateway inserts the separator.
+        """
         if topic_suffix.startswith("/"):
             raise ValueError(
                 "topic_suffix must not begin with '/'; the gateway inserts "
