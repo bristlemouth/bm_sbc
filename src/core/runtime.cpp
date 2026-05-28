@@ -17,6 +17,7 @@ extern "C" {
 #include "bcmp.h"
 #include "bm_ip.h"
 #include "config_cbor_map_service.h"
+#include "configuration.h"
 #include "device.h"
 #include "middleware.h"
 #include "pcap.h"
@@ -446,6 +447,8 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     platform_linux_set_cfg_dir(cfg_dir);
     bm_debug("bm_sbc: cfg-dir=%s\n", cfg_dir);
   }
+  // Load persisted partition contents into the in-memory config buffer
+  config_init();
 
   // --- Logging init -------------------------------------------------------
   // Default: also log to stdout when it is a TTY (interactive development).
