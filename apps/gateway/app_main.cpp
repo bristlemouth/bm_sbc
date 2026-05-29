@@ -626,7 +626,7 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
   static bool sbc_command_ran = false;
 
   if (!sbc_command_ran && CONTEXT.sbc_command_received) {
-    bm_log_info("Running sbc_command: %.*s", (int)sbc_command_len, sbc_command);
+    bm_log_info("Running sbc_command: %s", CONTEXT.sbc_command);
     const int status = system(CONTEXT.sbc_command);
     sbc_command_ran = true;
     if (status == -1) {
