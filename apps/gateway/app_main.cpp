@@ -506,6 +506,22 @@ static void get_wifi_enable(void) {
 #define MAX_NMEA_RMC_LEN 82
 #define MAX_NMEA_FIELDS 14
 
+static bool nmea_checksum_valid(char *line, size_t len) {
+  uint8_t checksum = 0;
+  uint32_t idx = 1;
+
+  while((idx < len) && ('*' != line[idx])) {
+    checksum ^= (uint8_t)line[idx];
+    idx++;
+  }
+  uint8_t line_checksum = strtoul(&line[idx + 1], NULL, 16);
+
+  if (checksum != line_checksum) {
+    return false;
+  }
+  return true;
+}
+
 static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output) {
   bool success = false;
 
@@ -516,19 +532,13 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
       break;
     }
 
-    uint8_t checksum = 0;
-    uint32_t idx = 1;
-
-    while((idx < len) && ('*' != line[idx])) {
-      checksum ^= (uint8_t)line[idx];
-      idx++;
-    }
-    uint8_t line_checksum = strtoul(&line[idx + 1], NULL, 16);
-
-    if (checksum != line_checksum) {
+    if (!nmea_checksum_valid(line, len)) {
       bm_log_error("Invalid checksum\n");
       break;
     }
+
+    // Make sure the line is NULL terminated
+    line[len] = '\0';
 
     int hour, min, sec, centisec = 0;
 
