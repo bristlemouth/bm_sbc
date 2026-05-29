@@ -1,13 +1,11 @@
 #include "gateway_device.h"
+#include "bm_log.h"
+#include "messages/neighbors.h"
 #include "uart_l2_transport.h"
 #include "virtual_port_device.h"
 
 #include <stdio.h>
 #include <string.h>
-
-// ---------------------------------------------------------------------------
-// Module state
-// ---------------------------------------------------------------------------
 
 /// The gateway wraps an existing VPD device and adds a UART port.
 /// VPD owns ports 1..vpd_ports; UART is vpd_ports + 1 (== GATEWAY_UART_PORT).
@@ -137,6 +135,16 @@ static const NetworkDeviceTrait s_gw_trait = {
     gw_num_ports,   gw_port_stats,   gw_handle_interrupt,
 };
 
+static void gw_neighbor_discovery_cb(bool up, BcmpNeighbor *neighbor) {
+  if (neighbor == NULL || neighbor->port != s_gw.uart_port) {
+    return;
+  }
+  bm_log_info("UART link %s (port %u)", up ? "up" : "down", neighbor->port);
+  if (s_gw.vpd.callbacks && s_gw.vpd.callbacks->link_change) {
+    s_gw.vpd.callbacks->link_change(neighbor->port - 1, up);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -149,6 +157,10 @@ NetworkDevice gateway_device_get(NetworkDevice *vpd_dev) {
                        ? (uint8_t)(MAX_TOTAL_PORTS - 1)
                        : raw_vpd_ports;
   s_gw.uart_port = s_gw.vpd_ports + 1;
+
+  // Register a callback for when neighbors appear and disappear
+  // and use it to tell L2 that the link is up/down.
+  bcmp_neighbor_register_discovery_callback(gw_neighbor_discovery_cb);
 
   // Share the VPD's internal callbacks struct with the gateway device so
   // that when bm_l2_init populates receive/link_change, those pointers
