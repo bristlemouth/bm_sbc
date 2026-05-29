@@ -568,7 +568,6 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
       break;
     }
 
-
     struct tm datetime = {
       .tm_sec = sec,
       .tm_min = min,
@@ -579,7 +578,6 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
       // So we do gps_year + 2000 - 1900 -> + 100
       .tm_year = year + 100,
     };
-
 
     time_t epoch = timegm(&datetime); // Get UTC Epoch
     if (epoch == (time_t)-1) {
@@ -628,7 +626,7 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
   static bool sbc_command_ran = false;
 
   if (!sbc_command_ran && CONTEXT.sbc_command_received) {
-    bm_log_info("Running sbc_command");
+    bm_log_info("Running sbc_command: %.*s", (int)sbc_command_len, sbc_command);
     const int status = system(CONTEXT.sbc_command);
     sbc_command_ran = true;
     if (status == -1) {
