@@ -144,7 +144,6 @@ static inline void cleanup_power_off_task(void) {
 template <std::size_t N>
 static inline void run_command_get_output(const std::string &cmd,
                                           std::array<char, N> &buf) {
-  bm_log_info("%s: running command - %s", __func__, cmd.c_str());
   FILE *fp = popen(cmd.c_str(), "r");
   if (fp == NULL) {
     return;
@@ -152,7 +151,6 @@ static inline void run_command_get_output(const std::string &cmd,
 
   // Only set the buffer if an error did not occur
   int err = ferror(fp);
-  bm_log_info("%s: command - %s returned %d", __func__, cmd.c_str(), err);
   if (!err) {
     fgets(buf.data(), buf.size(), fp);
     // Strip newline if it exists
@@ -187,8 +185,6 @@ static inline void wait_for_hydrotwin(void) {
     run_command_get_output(service_active, buf);
 
     // If the process is active, retry
-    const char *p = buf.data();
-    bm_log_info("%s: hydrotwin service is active? %s", __func__, p);
     if (!strcmp(buf.data(), "active")) {
       continue;
     }
@@ -196,13 +192,13 @@ static inline void wait_for_hydrotwin(void) {
     run_command_get_output(service_return, buf);
 
     // Set exited based on the output of the command
-    p = buf.data();
-    bm_log_info("%s: hydrotwin service returned - %s", __func__, p);
     const char *eq = strchr(buf.data(), '=');
     if (eq) {
       exited_code = atoi(eq + 1);
     }
   }
+
+  bm_log_info("%s: hydrotwin service inactive, powering off", __func__);
 }
 
 static void request_power_off(void *arg) {
