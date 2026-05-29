@@ -6,6 +6,8 @@
 #include "cbor.h"
 #include "pubsub.h"
 #include "spotter.h"
+#include <array>
+#include <string>
 extern "C" {
 #include "device.h"
 }
@@ -139,6 +141,70 @@ static inline void cleanup_power_off_task(void) {
   power_off_task.handle = NULL;
 }
 
+template <std::size_t N>
+static inline void run_command_get_output(const std::string &cmd,
+                                          std::array<char, N> &buf) {
+  bm_log_info("%s: running command - %s", __func__, cmd.c_str());
+  FILE *fp = popen(cmd.c_str(), "r");
+  if (fp == NULL) {
+    return;
+  }
+
+  // Only set the buffer if an error did not occur
+  int err = ferror(fp);
+  bm_log_info("%s: command - %s returned %d", __func__, cmd.c_str(), err);
+  if (!err) {
+    fgets(buf.data(), buf.size(), fp);
+    // Strip newline if it exists
+    buf.data()[strcspn(buf.data(), "\n")] = '\0';
+  }
+  pclose(fp);
+}
+
+static inline void wait_for_hydrotwin(void) {
+  // Stop cobs_to_shm
+  const std::string cobs_to_shm = "cobs_to_shm";
+  const std::string disable_cobs_to_shm =
+      "systemctl stop " + cobs_to_shm + ".service";
+  bm_log_info("%s: disabling %s, %s", __func__, cobs_to_shm.c_str(),
+              disable_cobs_to_shm.c_str());
+  system(disable_cobs_to_shm.c_str());
+
+  const std::string service_name = "hydrotwind.service";
+  const std::string service_active = "systemctl is-active " + service_name;
+  const std::string property = "ExecMainStatus";
+  const std::string service_return =
+      "systemctl show " + service_name + " -p " + property;
+
+  int exited_code = 1;
+  std::array<char, 128> buf = {};
+  static constexpr int sleep_time_us = 100000;
+
+  while (exited_code) {
+    usleep(sleep_time_us);
+    memset(buf.data(), 0, sizeof(buf));
+
+    run_command_get_output(service_active, buf);
+
+    // If the process is active, retry
+    const char *p = buf.data();
+    bm_log_info("%s: hydrotwin service is active? %s", __func__, p);
+    if (!strcmp(buf.data(), "active")) {
+      continue;
+    }
+
+    run_command_get_output(service_return, buf);
+
+    // Set exited based on the output of the command
+    p = buf.data();
+    bm_log_info("%s: hydrotwin service returned - %s", __func__, p);
+    const char *eq = strchr(buf.data(), '=');
+    if (eq) {
+      exited_code = atoi(eq + 1);
+    }
+  }
+}
+
 static void request_power_off(void *arg) {
   constexpr size_t POWEROFF_SERVICE_PATH_CAP = 64;
   char poweroff_service[POWEROFF_SERVICE_PATH_CAP] = {0};
@@ -152,6 +218,9 @@ static void request_power_off(void *arg) {
     return;
   }
   poweroff_service_len = static_cast<size_t>(n);
+
+  bm_log_info("replay_caught_up: waiting for hydrotwin service to finish");
+  wait_for_hydrotwin();
 
   bm_log_info("replay_caught_up: requesting %s (timeout=%us)", poweroff_service,
               POWEROFF_TIMEOUT_S);
