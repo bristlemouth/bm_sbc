@@ -528,21 +528,45 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
   do {
 
     if (!line || len > MAX_NMEA_RMC_LEN) {
-      bm_log_error("Invalid NMEA RMC string\n");
+      bm_log_error("Invalid NMEA RMC string");
       break;
     }
 
     if (!nmea_checksum_valid(line, len)) {
-      bm_log_error("Invalid checksum\n");
+      bm_log_error("Invalid checksum");
       break;
     }
 
     // Make sure the line is NULL terminated
     line[len] = '\0';
+    // Here we will break the NMEA RMC into it fields, splitting on the ',' or '*'.
+    // The fields will be:
+    //   0=$GPRMC, 1=HHMMSS.ss, 2=A/V, 3=lat, 4=N/S, 5=lon, 6=E/W,
+    //   7=speed, 8=course, 9=DDMMYY, ...
+    // We are only interested in fields 1 and 9.
+    // Details for the rest can be found here: https://gpsd.gitlab.io/gpsd/NMEA.html#_rmc_recommended_minimum_navigation_information
+    char *fields[MAX_NMEA_FIELDS];
+    int field_idx = 0;
+    fields[field_idx++] = line;
+    for (size_t i = 0; i < len && field_idx < 12; i++) {
+      if (line[i] == ',' || line[i] == '*') {
+        line[i] = '\0';
+        // Point the field at the first char after the ',' or '*'.
+        fields[field_idx++] = &line[i + 1];
+      }
+    }
 
     int hour, min, sec, centisec = 0;
+    if (sscanf(fields[1], "%2d%2d%2d.%2d", &hour, &min, &sec, &centisec) != 4) {
+      bm_log_error("Failed to get HHMMSS.ss");
+      break;
+    }
 
     int day, mon, year = 0;
+    if (sscanf(fields[9], "%2d%2d%2d", &day, &mon, &year) != 3) {
+      bm_log_error("Failed to get DDMMYY");
+      break;
+    }
 
 
     struct tm datetime = {
@@ -551,13 +575,15 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
       .tm_hour = hour,
       .tm_mday = day,
       .tm_mon = mon - 1,
-      .tm_year = year - 1900,
+      // GPS year is 2 digits. tm_year is (year - 1900).
+      // So we do gps_year + 2000 - 1900 -> + 100
+      .tm_year = year + 100,
     };
 
 
     time_t epoch = timegm(&datetime); // Get UTC Epoch
     if (epoch == (time_t)-1) {
-      bm_log_error("Failed to convert date time to epoch\n");
+      bm_log_error("Failed to convert date time to epoch");
       break;
     }
 
@@ -589,6 +615,7 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
 
     if (clock_settime(CLOCK_REALTIME, &unixtime) == 0) {
       system_time_synced = true;
+      bm_log_info("System time synced to GPS");
     } else {
       bm_log_error("Failed to snap system time: %s", strerror(errno));
       // Do not continue with the reset of this function until we can snap
@@ -601,6 +628,7 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
   static bool sbc_command_ran = false;
 
   if (!sbc_command_ran && CONTEXT.sbc_command_received) {
+    bm_log_info("Running sbc_command");
     const int status = system(CONTEXT.sbc_command);
     sbc_command_ran = true;
     if (status == -1) {
