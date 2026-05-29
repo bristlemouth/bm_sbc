@@ -11,12 +11,14 @@
 #include "sys_info_service.h"
 #include "sys_info_svc_reply_msg.h"
 #include <arpa/inet.h>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
 #include <string>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #define SBC_COMMAND_KEY "sbc_command"
@@ -38,11 +40,12 @@ static struct {
   int gps_udp_socket_fd = -1;
   uint64_t mote_node_id = 0;
   bool mote_neighbor_found = false;
-  bool mote_app_name_received = false;
+  std::atomic<bool> mote_app_name_received = false;
   char mote_app_name[MAX_STR_LEN_BYTES + 1] = "borealis2";
-  bool sbc_command_received = false;
-  bool config_map_received = false;
-  bool wifi_command_received = false;
+  std::atomic<bool> sbc_command_received = false;
+  char sbc_command[MAX_STR_LEN_BYTES] = "";
+  std::atomic<bool> config_map_received = false;
+  std::atomic<bool> wifi_command_received = false;
   uint32_t wifi_enabled = 1;
 } CONTEXT;
 
@@ -88,14 +91,7 @@ static BmErr sbc_command_reply_cb(uint8_t *payload) {
         bm_log_info("Received sbc command: %.*s", (int)sbc_command_len,
                     sbc_command);
         CONTEXT.sbc_command_received = true;
-        const int status = system(sbc_command);
-        if (status == -1) {
-          bm_log_error("Failed to run sbc_command: %s", strerror(errno));
-        } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-          bm_log_error("sbc_command exited %d", WEXITSTATUS(status));
-        } else if (WIFSIGNALED(status)) {
-          bm_log_error("sbc_command killed by signal %d", WTERMSIG(status));
-        }
+        memcpy(CONTEXT.sbc_command, sbc_command, sbc_command_len);
       }
     } else {
       bm_log_error("Failed to decode sbc command bcmp value, err=%d", err);
@@ -115,10 +111,10 @@ static void send_sbc_command_request(void) {
   }
 }
 
-static void wait_for_config_reply(bool *received) {
+static void wait_for_config_reply(std::atomic<bool> *received) {
   uint32_t total_awaited_ms = 0;
   const uint32_t timeout_ms = 500;
-  while (!*received && total_awaited_ms < timeout_ms) {
+  while (!received->load() && total_awaited_ms < timeout_ms) {
     const uint32_t delay_poll_ms = 20;
     bm_delay(delay_poll_ms);
     total_awaited_ms += delay_poll_ms;
@@ -507,9 +503,105 @@ static void get_wifi_enable(void) {
   }
 }
 
+#define MAX_NMEA_RMC_LEN 82
+#define MAX_NMEA_FIELDS 14
+
+static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output) {
+  bool success = false;
+
+  do {
+
+    if (!line || len > MAX_NMEA_RMC_LEN) {
+      bm_log_error("Invalid NMEA RMC string\n");
+      break;
+    }
+
+    uint8_t checksum = 0;
+    uint32_t idx = 1;
+
+    while((idx < len) && ('*' != line[idx])) {
+      checksum ^= (uint8_t)line[idx];
+      idx++;
+    }
+    uint8_t line_checksum = strtoul(&line[idx + 1], NULL, 16);
+
+    if (checksum != line_checksum) {
+      bm_log_error("Invalid checksum\n");
+      break;
+    }
+
+    int hour, min, sec, centisec = 0;
+
+    int day, mon, year = 0;
+
+
+    struct tm datetime = {
+      .tm_sec = sec,
+      .tm_min = min,
+      .tm_hour = hour,
+      .tm_mday = day,
+      .tm_mon = mon - 1,
+      .tm_year = year - 1900,
+    };
+
+
+    time_t epoch = timegm(&datetime); // Get UTC Epoch
+    if (epoch == (time_t)-1) {
+      bm_log_error("Failed to convert date time to epoch\n");
+      break;
+    }
+
+    time_output->tv_sec = epoch;
+    time_output->tv_nsec = (long)centisec * 10000000L;
+
+    success = true;
+  } while (0);
+
+  return success;
+}
+
 static void gprmc_callback(uint64_t node_id, const char *topic,
                            uint16_t topic_len, const uint8_t *data,
                            uint16_t data_len, uint8_t type, uint8_t version) {
+  static bool system_time_synced = false;
+
+  if (!system_time_synced) {
+
+    struct timespec unixtime = {
+      .tv_sec = 0,
+      .tv_nsec = 0,
+    };
+
+    if (!parse_nmea_rmc((char *)data, data_len, &unixtime)) {
+      bm_log_error("Failed to parse NMEA RMC string");
+      return;
+    }
+
+    if (clock_settime(CLOCK_REALTIME, &unixtime) == 0) {
+      system_time_synced = true;
+    } else {
+      bm_log_error("Failed to snap system time: %s", strerror(errno));
+      // Do not continue with the reset of this function until we can snap
+      // the realtime clock to the latest gps rmc message. This prevents
+      // the sbc_command from being run until the realtime clock is synced.
+      return;
+    }
+  }
+
+  static bool sbc_command_ran = false;
+
+  if (!sbc_command_ran && CONTEXT.sbc_command_received) {
+    const int status = system(CONTEXT.sbc_command);
+    sbc_command_ran = true;
+    if (status == -1) {
+      bm_log_error("Failed to run sbc_command: %s", strerror(errno));
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+      bm_log_error("sbc_command exited %d", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+      bm_log_error("sbc_command killed by signal %d", WTERMSIG(status));
+    }
+  }
+
   ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, data, data_len, 0,
                               (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
   if (bytes_sent == -1) {
