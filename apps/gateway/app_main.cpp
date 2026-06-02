@@ -1,3 +1,4 @@
+#include "bm_common_pub_sub.h"
 #include "bm_log.h"
 #include "bm_os.h"
 #include "cbor.h"
@@ -46,6 +47,8 @@ static struct {
   char sbc_command[MAX_STR_LEN_BYTES] = "";
   std::atomic<bool> config_map_received = false;
   std::atomic<bool> wifi_command_received = false;
+  std::atomic<bool> system_time_synced = false;
+  time_t last_rmc_time = 0;
   uint32_t wifi_enabled = 1;
 } CONTEXT;
 
@@ -594,35 +597,16 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
   return success;
 }
 
-static void gprmc_callback(uint64_t node_id, const char *topic,
-                           uint16_t topic_len, const uint8_t *data,
-                           uint16_t data_len, uint8_t type, uint8_t version) {
-  static bool system_time_synced = false;
-
-  if (!system_time_synced) {
-
-    struct timespec unixtime = {
-      .tv_sec = 0,
-      .tv_nsec = 0,
-    };
-
-    if (!parse_nmea_rmc((char *)data, data_len, &unixtime)) {
-      bm_log_error("Failed to parse NMEA RMC string");
-      return;
-    }
-
-    if (clock_settime(CLOCK_REALTIME, &unixtime) == 0) {
-      system_time_synced = true;
-      bm_log_info("System time synced to GPS");
-    } else {
-      bm_log_error("Failed to snap system time: %s", strerror(errno));
-      // Do not continue with the reset of this function until we can snap
-      // the realtime clock to the latest gps rmc message. This prevents
-      // the sbc_command from being run until the realtime clock is synced.
-      return;
-    }
+static bool sync_time(struct timespec *time) {
+  if (clock_settime(CLOCK_REALTIME, time) == 0) {
+    bm_log_info("System time synced");
+    return true;
   }
+  bm_log_error("Failed to sync system time: %s", strerror(errno));
+  return false;
+}
 
+static void run_sbc_command(void) {
   static bool sbc_command_ran = false;
 
   if (!sbc_command_ran && CONTEXT.sbc_command_received) {
@@ -637,11 +621,150 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
       bm_log_error("sbc_command killed by signal %d", WTERMSIG(status));
     }
   }
+}
+
+static void gprmc_callback(uint64_t node_id, const char *topic,
+                           uint16_t topic_len, const uint8_t *data,
+                           uint16_t data_len, uint8_t type, uint8_t version) {
+
+
+
+  if (!CONTEXT.system_time_synced.load()) {
+
+    struct timespec unixtime = {
+      .tv_sec = 0,
+      .tv_nsec = 0,
+    };
+
+    if (!parse_nmea_rmc((char *)data, data_len, &unixtime)) {
+      bm_log_error("Failed to parse NMEA RMC string");
+      return;
+    }
+
+    if (sync_time(&unixtime)) {
+      CONTEXT.system_time_synced = true;
+      bm_log_info("System time synced to GPS");
+    } else {
+      // Do not continue with the reset of this function until we can snap
+      // the realtime clock to the latest gps rmc message. This prevents
+      // the sbc_command from being run until the realtime clock is synced.
+      return;
+    }
+
+    // Runs the sbc command if it hasn't
+    // been run yet, otherwise does nothing.
+    run_sbc_command();
+  }
 
   ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, data, data_len, 0,
                               (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
   if (bytes_sent == -1) {
-    bm_log_error("GPS sendto failed: %s", strerror(errno));
+    bm_log_error("GPS RMC sendto failed: %s", strerror(errno));
+  }
+
+  CONTEXT.last_rmc_time = time(NULL);
+}
+
+/*
+ TODO list:
+ - have a timeout for gps nmea rmc and don't send fake zda to the port
+   unless we haven't got gps nmea rmc in X seconds (probably like 30?)
+*/
+
+#ifndef NSEC_PER_SEC
+#define NSEC_PER_SEC 1000000000L
+#endif
+
+static void utc_callback(uint64_t node_id, const char *topic,
+                         uint16_t topic_len, const uint8_t *data,
+                         uint16_t data_len, uint8_t type, uint8_t version) {
+  (void)node_id;
+  (void)topic;
+  (void)topic_len;
+
+  if (type != 1 || version != 1 ||
+      data_len < sizeof(bm_common_pub_sub_utc_t)) {
+    return;
+  }
+
+  const bm_common_pub_sub_utc_t *utc = (const bm_common_pub_sub_utc_t *)data;
+
+  if (!CONTEXT.system_time_synced.load()) {
+
+    struct timespec unixtime = {
+      .tv_sec = 0,
+      .tv_nsec = 0,
+    };
+
+    // parse the spotter/utc-time message and set unix time to it
+    // will need to separate the seconds portion from the uSec portion
+    // since tv_nsec is the number of nano seconds in the currecnt second
+    // not the number of nanoseconds since 1970 or whatever.
+    unixtime.tv_sec = utc->utc_us / NSEC_PER_SEC;
+    unixtime.tv_nsec = utc->utc_us % NSEC_PER_SEC;
+
+    if (sync_time(&unixtime)) {
+      CONTEXT.system_time_synced = true;
+      bm_log_info("System time synced to UTC");
+    } else {
+      // Do not continue with the reset of this function until we can snap
+      // the realtime clock to the latest gps rmc message. This prevents
+      // the sbc_command from being run until the realtime clock is synced.
+      return;
+    }
+
+    // Runs the sbc command if it hasn't
+    // been run yet, otherwise does nothing.
+    run_sbc_command();
+  }
+
+  // TODO:
+  // convert to nmea ZDA
+  // send to socket
+  char fake_gpzda[] = "$GPZDA,hhmmss.ff,dd,mm,yyyy,00,00*xx\r\n";
+  uint16_t fake_gpzda_len = 0;
+
+  const unsigned hundredths = rtc.ms / 10U;
+
+    char buf[] = "$GPZDA,hhmmss.ff,dd,mm,yyyy,00,00*xx\r\n";
+    buf[7] = rtc.hour / 10U + '0';
+    buf[8] = rtc.hour % 10U + '0';
+
+    buf[9] = rtc.minute / 10U + '0';
+    buf[10] = rtc.minute % 10U + '0';
+
+    buf[11] = rtc.second / 10U + '0';
+    buf[12] = rtc.second % 10U + '0';
+
+    buf[14] = hundredths / 10U + '0';
+    buf[15] = hundredths % 10U + '0';
+
+    buf[17] = rtc.day / 10U + '0';
+    buf[18] = rtc.day % 10U + '0';
+
+    buf[20] = rtc.month / 10U + '0';
+    buf[21] = rtc.month % 10U + '0';
+
+    buf[23] = (rtc.year / 1000U) % 10U + '0';
+    buf[24] = (rtc.year / 100U) % 10U + '0';
+    buf[25] = (rtc.year / 10U) % 10U + '0';
+    buf[26] = rtc.year % 10U + '0';
+
+    /* compute checksum of portion of buffer between $ and *, not inclusive */
+    unsigned int cksum = 0;
+    for (const unsigned char * c = (const unsigned char *)buf + 1; *c != '*'; c++) {
+      cksum ^= *c;
+    }
+
+    buf[34] = hex_byte(cksum / 16U);
+    buf[35] = hex_byte(cksum % 16U);
+
+  if (CONTEXT.last_rmc_time > 0 && (time(NULL) - CONTEXT.last_rmc_time > 30)) {
+    ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, fake_gpzda_len, 0,
+                              (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
+    if (bytes_sent == -1) {
+      bm_log_error("Fake GPS ZDA sendto failed: %s", strerror(errno));
+    }
   }
 }
 
@@ -652,6 +775,7 @@ void setup(void) {
     exit(EXIT_FAILURE);
   }
   bm_sub("gps-nmea/rmc", gprmc_callback);
+  bm_sub("spotter/utc-time", utc_callback);
   await_uart_neighbor();
   get_mote_app_name();
   get_mote_system_configs();
