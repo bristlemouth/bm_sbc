@@ -1,16 +1,18 @@
-#include "bm_common_pub_sub.h"
 #include "bm_log.h"
-#include "bm_os.h"
+extern "C" {
+  #include "bm_common_pub_sub.h"
+  #include "bm_os.h"
+  #include "config_cbor_map_service.h"
+  #include "config_cbor_map_srv_reply_msg.h"
+  #include "pubsub.h"
+  #include "sys_info_service.h"
+  #include "sys_info_svc_reply_msg.h"
+  #include "messages/config.h"
+  #include "messages/neighbors.h"
+}
 #include "cbor.h"
-#include "config_cbor_map_service.h"
-#include "config_cbor_map_srv_reply_msg.h"
 #include "gateway_device.h"
 #include "gateway_ipc.h"
-#include "messages/config.h"
-#include "messages/neighbors.h"
-#include "pubsub.h"
-#include "sys_info_service.h"
-#include "sys_info_svc_reply_msg.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdio>
@@ -715,51 +717,47 @@ static void utc_callback(uint64_t node_id, const char *topic,
     // been run yet, otherwise does nothing.
     run_sbc_command();
   }
-
-  // TODO:
-  // convert to nmea ZDA
-  // send to socket
-  // first convert to rtc?
+  UtcDateTime rtc;
+  date_time_from_utc(utc->utc_us, &rtc);
 
   char fake_gpzda[] = "$GPZDA,hhmmss.ff,dd,mm,yyyy,00,00*xx\r\n";
-  uint16_t fake_gpzda_len = 0;
 
-  // const unsigned hundredths = rtc.ms / 10U;
+  const unsigned hundredths = rtc.usec / 10000U;
 
-  // buf[7] = rtc.hour / 10U + '0';
-  // buf[8] = rtc.hour % 10U + '0';
+  fake_gpzda[7] = rtc.hour / 10U + '0';
+  fake_gpzda[8] = rtc.hour % 10U + '0';
 
-  // buf[9] = rtc.minute / 10U + '0';
-  // buf[10] = rtc.minute % 10U + '0';
+  fake_gpzda[9] = rtc.min / 10U + '0';
+  fake_gpzda[10] = rtc.min % 10U + '0';
 
-  // buf[11] = rtc.second / 10U + '0';
-  // buf[12] = rtc.second % 10U + '0';
+  fake_gpzda[11] = rtc.sec / 10U + '0';
+  fake_gpzda[12] = rtc.sec % 10U + '0';
 
-  // buf[14] = hundredths / 10U + '0';
-  // buf[15] = hundredths % 10U + '0';
+  fake_gpzda[14] = hundredths / 10U + '0';
+  fake_gpzda[15] = hundredths % 10U + '0';
 
-  // buf[17] = rtc.day / 10U + '0';
-  // buf[18] = rtc.day % 10U + '0';
+  fake_gpzda[17] = rtc.day / 10U + '0';
+  fake_gpzda[18] = rtc.day % 10U + '0';
 
-  // buf[20] = rtc.month / 10U + '0';
-  // buf[21] = rtc.month % 10U + '0';
+  fake_gpzda[20] = rtc.month / 10U + '0';
+  fake_gpzda[21] = rtc.month % 10U + '0';
 
-  // buf[23] = (rtc.year / 1000U) % 10U + '0';
-  // buf[24] = (rtc.year / 100U) % 10U + '0';
-  // buf[25] = (rtc.year / 10U) % 10U + '0';
-  // buf[26] = rtc.year % 10U + '0';
+  fake_gpzda[23] = (rtc.year / 1000U) % 10U + '0';
+  fake_gpzda[24] = (rtc.year / 100U) % 10U + '0';
+  fake_gpzda[25] = (rtc.year / 10U) % 10U + '0';
+  fake_gpzda[26] = rtc.year % 10U + '0';
 
-  // /* compute checksum of portion of buffer between $ and *, not inclusive */
-  // unsigned int cksum = 0;
-  // for (const unsigned char * c = (const unsigned char *)buf + 1; *c != '*'; c++) {
-  //   cksum ^= *c;
-  // }
+  /* compute checksum of portion of buffer between $ and *, not inclusive */
+  unsigned int cksum = 0;
+  for (const unsigned char * c = (const unsigned char *)fake_gpzda + 1; *c != '*'; c++) {
+    cksum ^= *c;
+  }
 
-  // buf[34] = hex_byte(cksum / 16U);
-  // buf[35] = hex_byte(cksum % 16U);
+  // fake_gpzda[34] = hex_byte(cksum / 16U);
+  // fake_gpzda[35] = hex_byte(cksum % 16U);
 
   if (CONTEXT.last_rmc_time > 0 && (time(NULL) - CONTEXT.last_rmc_time > 30)) {
-    ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, fake_gpzda_len, 0,
+    ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, strlen(fake_gpzda), 0,
                               (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
     if (bytes_sent == -1) {
       bm_log_error("Fake GPS ZDA sendto failed: %s", strerror(errno));
