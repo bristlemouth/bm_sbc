@@ -650,11 +650,11 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
       // the sbc_command from being run until the realtime clock is synced.
       return;
     }
-
-    // Runs the sbc command if it hasn't
-    // been run yet, otherwise does nothing.
-    run_sbc_command();
   }
+
+  // Runs the sbc command if it hasn't
+  // been run yet, otherwise does nothing.
+  run_sbc_command();
 
   ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, data, data_len, 0,
                               (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
@@ -718,11 +718,12 @@ static void utc_callback(uint64_t node_id, const char *topic,
       // the sbc_command from being run until the realtime clock is synced.
       return;
     }
-
-    // Runs the sbc command if it hasn't
-    // been run yet, otherwise does nothing.
-    run_sbc_command();
   }
+
+  // Runs the sbc command if it hasn't
+  // been run yet, otherwise does nothing.
+  run_sbc_command();
+
   UtcDateTime rtc = {0};
   date_time_from_utc(utc->utc_us, &rtc);
 
