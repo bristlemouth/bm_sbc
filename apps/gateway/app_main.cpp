@@ -671,8 +671,8 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
    unless we haven't got gps nmea rmc in X seconds (probably like 30?)
 */
 
-#ifndef NSEC_PER_SEC
-#define NSEC_PER_SEC 1000000000L
+#ifndef USEC_PER_SEC
+#define USEC_PER_SEC 1000000L
 #endif
 
 static unsigned char hex_byte(unsigned char c) {
@@ -704,8 +704,10 @@ static void utc_callback(uint64_t node_id, const char *topic,
     // will need to separate the seconds portion from the uSec portion
     // since tv_nsec is the number of nano seconds in the currecnt second
     // not the number of nanoseconds since 1970 or whatever.
-    unixtime.tv_sec = utc->utc_us / NSEC_PER_SEC;
-    unixtime.tv_nsec = utc->utc_us % NSEC_PER_SEC;
+    unixtime.tv_sec = utc->utc_us / USEC_PER_SEC;
+    unixtime.tv_nsec = (utc->utc_us % USEC_PER_SEC) * 1000L;
+
+    bm_log_info("unixtime ")
 
     if (sync_time(&unixtime)) {
       CONTEXT.system_time_synced = true;
