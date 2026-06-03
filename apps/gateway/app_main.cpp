@@ -544,7 +544,7 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
 
     // Make sure the line is NULL terminated
     line[len] = '\0';
-    // Here we will break the NMEA RMC into it fields, splitting on the ',' or '*'.
+    // Here we will break the NMEA RMC into fields, splitting on the ',' or '*'.
     // The fields will be:
     //   0=$GPRMC, 1=HHMMSS.ss, 2=A/V, 3=lat, 4=N/S, 5=lon, 6=E/W,
     //   7=speed, 8=course, 9=DDMMYY, ...
