@@ -675,6 +675,10 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
 #define NSEC_PER_SEC 1000000000L
 #endif
 
+static unsigned char hex_byte(unsigned char c) {
+    return (c >= 10) ? ('A' + (c - 10)) : ('0' + c);
+}
+
 static void utc_callback(uint64_t node_id, const char *topic,
                          uint16_t topic_len, const uint8_t *data,
                          uint16_t data_len, uint8_t type, uint8_t version) {
@@ -753,8 +757,8 @@ static void utc_callback(uint64_t node_id, const char *topic,
     cksum ^= *c;
   }
 
-  // fake_gpzda[34] = hex_byte(cksum / 16U);
-  // fake_gpzda[35] = hex_byte(cksum % 16U);
+  fake_gpzda[34] = hex_byte(cksum / 16U);
+  fake_gpzda[35] = hex_byte(cksum % 16U);
 
   if (CONTEXT.last_rmc_time > 0 && (time(NULL) - CONTEXT.last_rmc_time > 30)) {
     ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, strlen(fake_gpzda), 0,
