@@ -4,8 +4,11 @@
 #include "bm_os.h"
 #include "bm_service_request.h"
 #include "cbor.h"
+#include "messages/config.h"
 #include "pubsub.h"
 #include "spotter.h"
+#include <array>
+#include <string>
 extern "C" {
 #include "device.h"
 }
@@ -41,6 +44,7 @@ constexpr size_t SENSOR_TOPIC_PREFIX_LEN = 7 + 16 + 1;
 constexpr uint32_t POWEROFF_TIMEOUT_S = 1;
 
 int g_ipc_fd = -1;
+uint64_t mote_node_id = 0;
 
 static struct {
   BmTaskHandle handle = NULL;
@@ -139,6 +143,66 @@ static inline void cleanup_power_off_task(void) {
   power_off_task.handle = NULL;
 }
 
+template <std::size_t N>
+static inline void run_command_get_output(const std::string &cmd,
+                                          std::array<char, N> &buf) {
+  FILE *fp = popen(cmd.c_str(), "r");
+  if (fp == NULL) {
+    return;
+  }
+
+  // Only set the buffer if an error did not occur
+  int err = ferror(fp);
+  if (!err) {
+    fgets(buf.data(), buf.size(), fp);
+    // Strip newline if it exists
+    buf.data()[strcspn(buf.data(), "\n")] = '\0';
+  }
+  pclose(fp);
+}
+
+static inline void wait_for_hydrotwin(void) {
+  // Stop cobs_to_shm
+  const std::string cobs_to_shm = "cobs_to_shm";
+  const std::string disable_cobs_to_shm =
+      "systemctl stop " + cobs_to_shm + ".service";
+  bm_log_info("%s: disabling %s, %s", __func__, cobs_to_shm.c_str(),
+              disable_cobs_to_shm.c_str());
+  system(disable_cobs_to_shm.c_str());
+
+  const std::string service_name = "hydrotwind.service";
+  const std::string service_active = "systemctl is-active " + service_name;
+  const std::string property = "ExecMainStatus";
+  const std::string service_return =
+      "systemctl show " + service_name + " -p " + property;
+
+  int exited_code = 1;
+  std::array<char, 128> buf = {};
+  static constexpr int sleep_time_us = 100000;
+
+  while (exited_code) {
+    usleep(sleep_time_us);
+    memset(buf.data(), 0, sizeof(buf));
+
+    run_command_get_output(service_active, buf);
+
+    // If the process is active, retry
+    if (!strcmp(buf.data(), "active")) {
+      continue;
+    }
+
+    run_command_get_output(service_return, buf);
+
+    // Set exited based on the output of the command
+    const char *eq = strchr(buf.data(), '=');
+    if (eq) {
+      exited_code = atoi(eq + 1);
+    }
+  }
+
+  bm_log_info("%s: hydrotwin service inactive, powering off", __func__);
+}
+
 static void request_power_off(void *arg) {
   constexpr size_t POWEROFF_SERVICE_PATH_CAP = 64;
   char poweroff_service[POWEROFF_SERVICE_PATH_CAP] = {0};
@@ -152,6 +216,9 @@ static void request_power_off(void *arg) {
     return;
   }
   poweroff_service_len = static_cast<size_t>(n);
+
+  bm_log_info("replay_caught_up: waiting for hydrotwin service to finish");
+  wait_for_hydrotwin();
 
   bm_log_info("replay_caught_up: requesting %s (timeout=%us)", poweroff_service,
               POWEROFF_TIMEOUT_S);
@@ -313,6 +380,116 @@ void handle_sensor_data(const CborValue *map) {
   }
 }
 
+// A stored text string is CBOR-encoded into MAX_CONFIG_BUFFER_SIZE_BYTES
+// with a 1–3 byte length prefix. For payloads <= 255 bytes the prefix is
+// 2 bytes, so the usable string length is bounded below the buffer size.
+// (Without this check set_config_string silently fails for strings near
+// MAX_STR_LEN_BYTES because cbor_encode_text_string overflows the buffer.)
+constexpr size_t MAX_IPC_CONFIG_STR_BYTES = MAX_CONFIG_BUFFER_SIZE_BYTES - 2;
+
+bool apply_config_string(const char *key, size_t key_len, const CborValue *v) {
+  size_t str_len = 0;
+  if (cbor_value_get_string_length(v, &str_len) != CborNoError) {
+    bm_log_warn("IPC config_set: failed to read string length");
+    return false;
+  }
+  if (str_len > MAX_IPC_CONFIG_STR_BYTES) {
+    bm_log_warn(
+        "IPC config_set: string value too long (max %zu bytes, got %zu)",
+        MAX_IPC_CONFIG_STR_BYTES, str_len);
+    return false;
+  }
+  char value[MAX_IPC_CONFIG_STR_BYTES + 1] = {0};
+  size_t cap = sizeof(value) - 1;
+  if (cbor_value_copy_text_string(v, value, &cap, nullptr) != CborNoError) {
+    bm_log_warn("IPC config_set: failed to read string value");
+    return false;
+  }
+  value[cap] = '\0';
+  bm_log_info("IPC config_set key='%s' value(str)='%s'", key, value);
+  return set_config_string(BM_CFG_PARTITION_SYSTEM, key, key_len, value, cap);
+}
+
+bool apply_config_uint(const char *key, size_t key_len, const CborValue *v) {
+  uint64_t u = 0;
+  cbor_value_get_uint64(v, &u);
+  if (u > UINT32_MAX) {
+    bm_log_warn("IPC config_set: uint value %" PRIu64 " out of range", u);
+    return false;
+  }
+  bm_log_info("IPC config_set key='%s' value(uint)=%" PRIu64, key, u);
+  return set_config_uint(BM_CFG_PARTITION_SYSTEM, key, key_len,
+                         static_cast<uint32_t>(u));
+}
+
+bool apply_config_int(const char *key, size_t key_len, const CborValue *v) {
+  int64_t i = 0;
+  cbor_value_get_int64(v, &i);
+  if (i < INT32_MIN || i > INT32_MAX) {
+    bm_log_warn("IPC config_set: int value %" PRId64 " out of range", i);
+    return false;
+  }
+  bm_log_info("IPC config_set key='%s' value(int)=%" PRId64, key, i);
+  return set_config_int(BM_CFG_PARTITION_SYSTEM, key, key_len,
+                        static_cast<int32_t>(i));
+}
+
+bool apply_config_float(const char *key, size_t key_len, const CborValue *v) {
+  double d = 0.0;
+  if (cbor_value_is_double(v)) {
+    cbor_value_get_double(v, &d);
+  } else {
+    float f = 0.0f;
+    cbor_value_get_float(v, &f);
+    d = f;
+  }
+  bm_log_info("IPC config_set key='%s' value(float)=%f", key, d);
+  return set_config_float(BM_CFG_PARTITION_SYSTEM, key, key_len,
+                          static_cast<float>(d));
+}
+
+void handle_config_set(const CborValue *map) {
+  bm_log_info("IPC RX config_set");
+
+  char key[MAX_KEY_LEN_BYTES + 1] = {0};
+  size_t key_len = 0;
+  if (!cbor_get_text(map, "config_key", key, sizeof(key), &key_len) ||
+      key_len == 0) {
+    bm_log_warn("IPC config_set: missing/empty config_key");
+    return;
+  }
+
+  CborValue v;
+  if (cbor_value_map_find_value(map, "config_value", &v) != CborNoError ||
+      cbor_value_get_type(&v) == CborInvalidType) {
+    bm_log_warn("IPC config_set: missing config_value");
+    return;
+  }
+
+  bool ok;
+  if (cbor_value_is_text_string(&v)) {
+    ok = apply_config_string(key, key_len, &v);
+  } else if (cbor_value_is_unsigned_integer(&v)) {
+    ok = apply_config_uint(key, key_len, &v);
+  } else if (cbor_value_is_integer(&v)) {
+    ok = apply_config_int(key, key_len, &v);
+  } else if (cbor_value_is_double(&v) || cbor_value_is_float(&v)) {
+    ok = apply_config_float(key, key_len, &v);
+  } else {
+    bm_log_warn("IPC config_set: unsupported config_value CBOR type");
+    return;
+  }
+
+  // Per-type helpers already logged the specific failure reason.
+  if (!ok) {
+    return;
+  }
+
+  if (!save_config(BM_CFG_PARTITION_SYSTEM, false)) {
+    bm_log_warn("IPC config_set: save_config failed for key='%s'", key);
+  }
+}
+
 void dispatch(const uint8_t *buf, size_t len) {
   CborParser parser;
   CborValue root;
@@ -351,6 +528,8 @@ void dispatch(const uint8_t *buf, size_t len) {
     handle_spotter_tx(&root);
   } else if (strcmp(type, "sensor_data") == 0) {
     handle_sensor_data(&root);
+  } else if (strcmp(type, "config_set") == 0) {
+    handle_config_set(&root);
   } else {
     bm_log_warn("IPC: unknown type '%s'", type);
   }
@@ -358,7 +537,9 @@ void dispatch(const uint8_t *buf, size_t len) {
 
 } // namespace
 
-int gateway_ipc_init(void) {
+int gateway_ipc_init(uint64_t mote_node_id_arg) {
+  mote_node_id = mote_node_id_arg;
+
   if (g_ipc_fd >= 0) {
     return 0;
   }

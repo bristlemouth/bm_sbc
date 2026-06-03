@@ -41,6 +41,8 @@ python -m pip install --quiet --disable-pip-version-check -r "$REQ_FILE"
 WORK=$(mktemp -d /tmp/bm_sbc_ipc_test_XXXXXX)
 SOCK_PATH="$WORK/gateway_ipc.sock"
 LOG="$WORK/server.log"
+CFG_DIR="$WORK/cfg"
+mkdir -p "$CFG_DIR"
 PASS=0; FAIL=0
 
 check() {
@@ -52,6 +54,18 @@ check() {
     echo "  FAIL: $desc"
     echo "        (pattern not found: '$pattern')"
     FAIL=$((FAIL + 1))
+  fi
+}
+
+check_absent() {
+  local desc="$1" pattern="$2"
+  if grep -qF "$pattern" "$LOG" 2>/dev/null; then
+    echo "  FAIL: $desc"
+    echo "        (unexpected pattern present: '$pattern')"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: $desc"
+    PASS=$((PASS + 1))
   fi
 }
 
@@ -74,6 +88,7 @@ BM_SBC_LOG_STDOUT=1 BM_SBC_LOG_LEVEL=info \
   "$BINARY" --node-id 0x0000000000000001 \
             --socket-dir "$WORK" \
             --log-dir "$WORK/logs" \
+            --cfg-dir "$CFG_DIR" \
             >"$LOG" 2>&1 &
 SERVER_PID=$!
 
@@ -95,7 +110,13 @@ echo "=== Sending messages via Python client ==="
 PYTHONPATH="$REPO_ROOT/clients/python" \
 BM_SBC_GATEWAY_IPC="$SOCK_PATH" \
 python - <<'PY'
+import os
+import socket
+
+import cbor2
+
 from bm_sbc_gateway import (
+    config_set,
     replay_caught_up,
     sensor_data,
     spotter_log,
@@ -109,6 +130,25 @@ sensor_data("temperature", b"\xaa\xbb\xcc")
 # no-opt variants: make sure omitted-field path works too
 spotter_log("no file, no ts")
 spotter_tx(b"\x10\x20")
+
+# config_set — one per supported CBOR-derived ConfigDataType.
+config_set("wifi_ssid", "mynet")
+config_set("baud", 115200)
+config_set("offset_db", -7)
+config_set("gain", 2.5)
+
+# Negative cases — should be rejected with a known warn line.
+config_set("toolong", "x" * 60)         # > MAX_IPC_CONFIG_STR_BYTES (48)
+config_set("flag", True)                # unsupported CBOR type
+
+# Missing config_key — bypass the helper to craft a malformed payload.
+sock_path = os.environ["BM_SBC_GATEWAY_IPC"]
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+sock.sendto(
+    cbor2.dumps({"v": 1, "type": "config_set", "config_value": "x"}),
+    sock_path,
+)
+sock.close()
 PY
 
 # Give the server a moment to process all datagrams.
@@ -122,6 +162,24 @@ check "spotter_log minimal (no file/ts)"    "IPC RX spotter_log data_len=14 file
 check "spotter_tx iridium_fallback=1"       "IPC RX spotter_tx data_len=4 iridium_fallback=1"
 check "spotter_tx cellular-only default"    "IPC RX spotter_tx data_len=2 iridium_fallback=0"
 check "sensor_data topic construction"      "IPC RX sensor_data topic='sensor/0000000000000001/temperature' data_len=3"
+
+check "config_set string"                   "IPC config_set key='wifi_ssid' value(str)='mynet'"
+check "config_set uint"                     "IPC config_set key='baud' value(uint)=115200"
+check "config_set negative int"             "IPC config_set key='offset_db' value(int)=-7"
+check "config_set float"                    "IPC config_set key='gain' value(float)=2.500000"
+check "config_set oversized string rejected" "IPC config_set: string value too long (max 48 bytes, got 60)"
+check "config_set unsupported type rejected" "IPC config_set: unsupported config_value CBOR type"
+check "config_set missing key rejected"     "IPC config_set: missing/empty config_key"
+
+check_absent "no save_config failures"      "save_config failed"
+
+if [[ -s "$CFG_DIR/config.sys.bin" ]]; then
+  echo "  PASS: config.sys.bin persisted ($(wc -c <"$CFG_DIR/config.sys.bin") bytes)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: $CFG_DIR/config.sys.bin missing or empty"
+  FAIL=$((FAIL + 1))
+fi
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

@@ -6,7 +6,7 @@
 #include "gateway_ipc.h"
 
 void setup(void) {
-  if (gateway_ipc_init() != 0) {
+  if (gateway_ipc_init(0) != 0) {
     bm_log_fatal("ipc_test: gateway_ipc_init failed");
   }
 }
