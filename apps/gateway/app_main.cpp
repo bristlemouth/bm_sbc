@@ -600,6 +600,7 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
 }
 
 static bool sync_time(struct timespec *time) {
+  bm_log_info("Syncing to unixtime %ld : %ld", time->tv_sec, time->tv_nsec);
   if (clock_settime(CLOCK_REALTIME, time) == 0) {
     bm_log_info("System time synced");
     return true;
@@ -665,12 +666,6 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
   CONTEXT.last_rmc_time = time(NULL);
 }
 
-/*
- TODO list:
- - have a timeout for gps nmea rmc and don't send fake zda to the port
-   unless we haven't got gps nmea rmc in X seconds (probably like 30?)
-*/
-
 #ifndef USEC_PER_SEC
 #define USEC_PER_SEC 1000000L
 #endif
@@ -706,8 +701,6 @@ static void utc_callback(uint64_t node_id, const char *topic,
     // not the number of nanoseconds since 1970 or whatever.
     unixtime.tv_sec = utc->utc_us / USEC_PER_SEC;
     unixtime.tv_nsec = (utc->utc_us % USEC_PER_SEC) * 1000L;
-
-    bm_log_info("unixtime %ld : %ld", unixtime.tv_sec, unixtime.tv_nsec);
 
     if (sync_time(&unixtime)) {
       CONTEXT.system_time_synced = true;
@@ -763,7 +756,7 @@ static void utc_callback(uint64_t node_id, const char *topic,
   fake_gpzda[34] = hex_byte(cksum / 16U);
   fake_gpzda[35] = hex_byte(cksum % 16U);
 
-  bm_log_info("Fake GPS ZDA: %s", fake_gpzda);
+  bm_log_debug("Fake GPS ZDA: %s", fake_gpzda);
 
   if (CONTEXT.last_rmc_time > 0 && (time(NULL) - CONTEXT.last_rmc_time > 30)) {
     ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, strlen(fake_gpzda), 0,
