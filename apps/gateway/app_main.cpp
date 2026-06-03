@@ -707,7 +707,7 @@ static void utc_callback(uint64_t node_id, const char *topic,
     unixtime.tv_sec = utc->utc_us / USEC_PER_SEC;
     unixtime.tv_nsec = (utc->utc_us % USEC_PER_SEC) * 1000L;
 
-    bm_log_info("unixtime ")
+    bm_log_info("unixtime %ld : %ld", unixtime.tv_sec, unixtime.tv_nsec);
 
     if (sync_time(&unixtime)) {
       CONTEXT.system_time_synced = true;
