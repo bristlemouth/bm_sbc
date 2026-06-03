@@ -721,7 +721,7 @@ static void utc_callback(uint64_t node_id, const char *topic,
     // been run yet, otherwise does nothing.
     run_sbc_command();
   }
-  UtcDateTime rtc;
+  UtcDateTime rtc = {0};
   date_time_from_utc(utc->utc_us, &rtc);
 
   char fake_gpzda[] = "$GPZDA,hhmmss.ff,dd,mm,yyyy,00,00*xx\r\n";
@@ -759,6 +759,8 @@ static void utc_callback(uint64_t node_id, const char *topic,
 
   fake_gpzda[34] = hex_byte(cksum / 16U);
   fake_gpzda[35] = hex_byte(cksum % 16U);
+
+  bm_log_info("Fake GPS ZDA: %s", fake_gpzda);
 
   if (CONTEXT.last_rmc_time > 0 && (time(NULL) - CONTEXT.last_rmc_time > 30)) {
     ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, strlen(fake_gpzda), 0,
