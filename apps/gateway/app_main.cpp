@@ -81,6 +81,22 @@ static void await_uart_neighbor(void) {
 }
 
 /**************** SBC command ****************/
+static void run_sbc_command(void) {
+  static bool sbc_command_ran = false;
+
+  if (CONTEXT.system_time_synced && !sbc_command_ran && CONTEXT.sbc_command_received) {
+    bm_log_info("Running sbc_command: %s", CONTEXT.sbc_command);
+    const int status = system(CONTEXT.sbc_command);
+    sbc_command_ran = true;
+    if (status == -1) {
+      bm_log_error("Failed to run sbc_command: %s", strerror(errno));
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+      bm_log_error("sbc_command exited %d", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+      bm_log_error("sbc_command killed by signal %d", WTERMSIG(status));
+    }
+  }
+}
 
 static BmErr sbc_command_reply_cb(uint8_t *payload) {
   BmErr err = BmENODATA;
@@ -97,6 +113,8 @@ static BmErr sbc_command_reply_cb(uint8_t *payload) {
                     sbc_command);
         CONTEXT.sbc_command_received = true;
         memcpy(CONTEXT.sbc_command, sbc_command, sbc_command_len);
+        // Will run the sbc command if the time is synced
+        run_sbc_command();
       }
     } else {
       bm_log_error("Failed to decode sbc command bcmp value, err=%d", err);
@@ -607,23 +625,6 @@ static bool sync_time(struct timespec *time) {
   }
   bm_log_error("Failed to sync system time: %s", strerror(errno));
   return false;
-}
-
-static void run_sbc_command(void) {
-  static bool sbc_command_ran = false;
-
-  if (!sbc_command_ran && CONTEXT.sbc_command_received) {
-    bm_log_info("Running sbc_command: %s", CONTEXT.sbc_command);
-    const int status = system(CONTEXT.sbc_command);
-    sbc_command_ran = true;
-    if (status == -1) {
-      bm_log_error("Failed to run sbc_command: %s", strerror(errno));
-    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-      bm_log_error("sbc_command exited %d", WEXITSTATUS(status));
-    } else if (WIFSIGNALED(status)) {
-      bm_log_error("sbc_command killed by signal %d", WTERMSIG(status));
-    }
-  }
 }
 
 static void gprmc_callback(uint64_t node_id, const char *topic,
