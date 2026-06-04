@@ -756,10 +756,7 @@ static void utc_callback(uint64_t node_id, const char *topic,
   fake_gpzda[34] = hex_byte(cksum / 16U);
   fake_gpzda[35] = hex_byte(cksum % 16U);
 
-  bm_log_debug("Fake GPS ZDA: %s", fake_gpzda);
-
   if (CONTEXT.last_rmc_time <= 0 || (time(NULL) - CONTEXT.last_rmc_time > 30)) {
-    bm_log_debug("Sendto fake zda");
     ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, strlen(fake_gpzda), 0,
                               (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
     if (bytes_sent == -1) {
