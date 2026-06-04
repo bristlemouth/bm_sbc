@@ -656,7 +656,7 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
   // Runs the sbc command if it hasn't
   // been run yet, otherwise does nothing.
   run_sbc_command();
-
+  bm_log_debug("sendto: %.*s", data_len, (char*)data);
   ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, data, data_len, 0,
                               (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
   if (bytes_sent == -1) {
@@ -757,6 +757,7 @@ static void utc_callback(uint64_t node_id, const char *topic,
   fake_gpzda[35] = hex_byte(cksum % 16U);
 
   if (CONTEXT.last_rmc_time <= 0 || (time(NULL) - CONTEXT.last_rmc_time > 30)) {
+    bm_log_debug("sendto: %s", fake_gpzda);
     ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, strlen(fake_gpzda), 0,
                               (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
     if (bytes_sent == -1) {
