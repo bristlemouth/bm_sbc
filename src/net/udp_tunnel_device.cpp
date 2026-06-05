@@ -88,25 +88,24 @@ static BmErr utd_disable_port(void *self, uint8_t port_num) {
 }
 
 /// Called by bm_core's 100 ms renegotiation timer for each port.
-/// We use udp_tunnel_peer_alive() (set by first received frame) as the
-/// link-state signal, mirroring how raw_eth_device uses carrier detection.
+/// All configured tunnel peers are considered immediately reachable since we
+/// have their static IP:port — there is no carrier-detect signal to wait for.
+/// Once both sides have their ports up, BCMP heartbeats flow and neighbor
+/// discovery proceeds normally.  The alive flag is preserved for diagnostics.
 static BmErr utd_retry_negotiation(void *self, uint8_t port_index,
                                     bool *renegotiated) {
   (void)self;
   *renegotiated = false;
   if (port_index >= s_utd.cfg.num_peers) { return BmEINVAL; }
 
-  uint8_t bm_port = port_index + 1; // transport is 1-based
-  bool now_alive  = udp_tunnel_peer_alive(bm_port);
-  bool was_up     = s_utd.link_state[port_index];
-
-  if (now_alive && !was_up) {
+  if (!s_utd.link_state[port_index]) {
     s_utd.link_state[port_index] = true;
     *renegotiated = true;
     if (s_utd.callbacks.link_change) {
       s_utd.callbacks.link_change(port_index, true);
     }
-    bm_log_info("udp_tunnel_device: port %u up (peer %s:%u)", (unsigned)bm_port,
+    bm_log_info("udp_tunnel_device: port %u up (peer %s:%u)",
+                (unsigned)(port_index + 1),
                 s_utd.cfg.peers[port_index].ip,
                 (unsigned)s_utd.cfg.peers[port_index].port);
   }
