@@ -32,6 +32,15 @@ static void etd_tunnel_link_change(uint8_t port_idx, bool is_up) {
   }
 }
 
+/// Tunnel receive wrapper — adjusts 1-based tunnel-local port_num to the
+/// composite device's 1-based port number by adding the eth port offset.
+/// Without this, bm_l2 would think tunnel frames arrived on eth port 1.
+static void etd_tunnel_receive(uint8_t port_num, const uint8_t *data, size_t len) {
+  if (s_etd.callbacks.receive) {
+    s_etd.callbacks.receive((uint8_t)(s_etd.eth_ports + port_num), data, len);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // NetworkDeviceTrait implementation
 // ---------------------------------------------------------------------------
@@ -65,8 +74,8 @@ static BmErr etd_enable(void *self) {
   // in the 0-based range [0..eth_ports-1] which is correct for bm_l2.
   *s_etd.eth_dev.callbacks = s_etd.callbacks;
   //
-  // udp_tunnel: same receive, but link_change needs the port offset wrapper.
-  s_etd.tunnel_dev.callbacks->receive     = s_etd.callbacks.receive;
+  // udp_tunnel: offset-adjusted wrappers for both receive and link_change.
+  s_etd.tunnel_dev.callbacks->receive     = etd_tunnel_receive;
   s_etd.tunnel_dev.callbacks->link_change = etd_tunnel_link_change;
 
   BmErr err = s_etd.eth_dev.trait->enable(s_etd.eth_dev.self);
