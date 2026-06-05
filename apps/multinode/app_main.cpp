@@ -77,6 +77,8 @@ static void on_pubsub(uint64_t src_node_id, const char *topic,
 void setup(void) {
   bcmp_neighbor_register_discovery_callback(on_neighbor);
   bm_sub(k_topic, on_pubsub);
+  bm_sub("spotter/fprintf", on_pubsub);
+  bm_sub("spotter/printf", on_pubsub);
   bm_log_info("[%016" PRIx64 "] multinode app: setup", node_id());
 }
 
