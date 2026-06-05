@@ -46,7 +46,7 @@ static const double   k_delay_sec    = 3.0; // wall-clock seconds before action
 
 static bool            s_start_recorded = false;
 static struct timespec s_start_time;
-static bool            s_actions_done   = false;
+static struct timespec s_last_pub_time  = {0, 0};
 
 // ---------------------------------------------------------------------------
 // Callbacks
@@ -81,22 +81,24 @@ void setup(void) {
 }
 
 void loop(void) {
-  if (s_actions_done) { return; }
-
-  // Use wall-clock time for the startup delay so the timing is correct
-  // regardless of nanosleep resolution (which varies across platforms).
   if (!s_start_recorded) {
     clock_gettime(CLOCK_MONOTONIC, &s_start_time);
+    s_last_pub_time = s_start_time;
     s_start_recorded = true;
     return;
   }
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
-  double elapsed = (now.tv_sec - s_start_time.tv_sec)
-                 + (now.tv_nsec - s_start_time.tv_nsec) / 1e9;
-  if (elapsed < k_delay_sec) { return; }
+  double elapsed_since_start = (now.tv_sec - s_start_time.tv_sec)
+                             + (now.tv_nsec - s_start_time.tv_nsec) / 1e9;
+  double elapsed_since_pub   = (now.tv_sec - s_last_pub_time.tv_sec)
+                             + (now.tv_nsec - s_last_pub_time.tv_nsec) / 1e9;
 
-  s_actions_done = true;
+  // Wait for initial delay, then publish + ping every k_delay_sec.
+  if (elapsed_since_start < k_delay_sec) { return; }
+  if (elapsed_since_pub   < k_delay_sec) { return; }
+
+  s_last_pub_time = now;
 
   // Send a multicast ping — bm_core handles the echo request/reply cycle and
   // logs the reply line (bcmp_seq=...) via bm_debug/printf.
