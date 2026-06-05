@@ -81,6 +81,7 @@ add_library(bm_sbc_core STATIC
   src/net/gateway_ipc.cpp
   src/net/udp_tunnel_device.cpp
   $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/src/net/raw_eth_device.cpp>
+  $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/src/net/eth_tunnel_device.cpp>
   src/transports/uart_l2/cobs.c
   src/transports/uart_l2/crc32c.c
   src/transports/uart_l2/frame_codec.c

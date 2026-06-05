@@ -6,6 +6,7 @@
 #include "platform_linux.h"
 #ifdef __linux__
 #include "raw_eth_device.h"
+#include "eth_tunnel_device.h"
 #endif
 #include "timer_callback_handler.h"
 #include "uart_l2_transport.h"
@@ -619,12 +620,20 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   bool gateway_mode = (uart_path[0] != '\0');
   bool eth_mode     = (eth0_iface[0] != '\0');
   bool tunnel_mode  = (tunnel_cfg.num_peers > 0);
-  int active_modes  = (int)gateway_mode + (int)eth_mode + (int)tunnel_mode;
-  if (active_modes > 1) {
-    fprintf(stderr, "bm_sbc: --uart, --eth0, and --tunnel-peer are mutually exclusive\n");
+  // --uart and --eth0 are mutually exclusive (both own the L2 physical ports).
+  // --eth0 + --tunnel-peer is allowed: eth is the BM physical network,
+  // tunnel reaches a remote peer (e.g. laptop over Tailscale).
+  // --uart + --tunnel-peer is also allowed (tunnel relays to remote peer).
+  if (gateway_mode && eth_mode) {
+    fprintf(stderr, "bm_sbc: --uart and --eth0 are mutually exclusive\n");
     return 1;
   }
-  if (eth_mode) {
+  if (eth_mode && tunnel_mode) {
+    bm_log_info("node_id=0x%016" PRIx64 " eth0=%s%s%s tunnel peers=%u listen_port=%u",
+                vpc.own_node_id, eth0_iface,
+                eth1_iface[0] ? " eth1=" : "", eth1_iface[0] ? eth1_iface : "",
+                (unsigned)tunnel_cfg.num_peers, (unsigned)tunnel_cfg.listen_port);
+  } else if (eth_mode) {
     bm_log_info("node_id=0x%016" PRIx64 " eth0=%s%s%s", vpc.own_node_id,
                 eth0_iface, eth1_iface[0] ? " eth1=" : "",
                 eth1_iface[0] ? eth1_iface : "");
@@ -674,7 +683,6 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     net_dev = gateway_device_get(&vpd_dev);
   } else if (eth_mode) {
 #ifdef __linux__
-    // Raw Ethernet mode: ADIN2111 exposed as Linux network interfaces.
     RawEthDeviceCfg eth_cfg;
     memset(&eth_cfg, 0, sizeof(eth_cfg));
     strncpy(eth_cfg.ports[0].iface_name, eth0_iface,
@@ -685,7 +693,16 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
               sizeof(eth_cfg.ports[1].iface_name) - 1);
       eth_cfg.num_ports = 2;
     }
-    net_dev = raw_eth_device_get(&eth_cfg);
+    if (tunnel_mode) {
+      // Eth + tunnel composite: ADIN2111 ports + remote peer(s) over UDP.
+      EthTunnelDeviceCfg et_cfg;
+      et_cfg.eth    = eth_cfg;
+      et_cfg.tunnel = tunnel_cfg;
+      net_dev = eth_tunnel_device_get(&et_cfg);
+    } else {
+      // Raw Ethernet only.
+      net_dev = raw_eth_device_get(&eth_cfg);
+    }
 #else
     fprintf(stderr, "bm_sbc: --eth0 is only supported on Linux\n");
     return 1;
