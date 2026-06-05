@@ -54,7 +54,7 @@ static UdpTunnelState s_state;
 static bool resolve_peer(TunnelPeer *peer) {
   struct addrinfo hints, *res;
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family   = AF_UNSPEC;   // Accept IPv4 or IPv6 (Tailscale is IPv4)
+  hints.ai_family   = AF_INET;    // Force IPv4 — Tailscale peers are 100.x.x.x
   hints.ai_socktype = SOCK_DGRAM;
   char port_str[8];
   snprintf(port_str, sizeof(port_str), "%u", (unsigned)peer->cfg.port);
@@ -186,41 +186,26 @@ int udp_tunnel_transport_init(uint16_t listen_port,
     }
   }
 
-  // Open a UDP socket bound to listen_port on all interfaces (INADDR_ANY).
-  // Using IPv6 with IPV6_V6ONLY=0 accepts both IPv4 and IPv6 on most kernels.
-  // Fall back to IPv4-only if IPv6 is unavailable.
-  int fd = socket(AF_INET6, SOCK_DGRAM, 0);
-  int v6only = 0;
-  if (fd < 0 || setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0) {
-    if (fd >= 0) { close(fd); }
-    fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) {
-      bm_log_error("udp_tunnel: socket() failed: %s", strerror(errno));
-      return -1;
-    }
-    struct sockaddr_in sa4;
-    memset(&sa4, 0, sizeof(sa4));
-    sa4.sin_family      = AF_INET;
-    sa4.sin_port        = htons(listen_port);
-    sa4.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (bind(fd, (struct sockaddr *)&sa4, sizeof(sa4)) < 0) {
-      bm_log_error("udp_tunnel: bind(IPv4, :%u) failed: %s",
-                   (unsigned)listen_port, strerror(errno));
-      close(fd);
-      return -1;
-    }
-  } else {
-    struct sockaddr_in6 sa6;
-    memset(&sa6, 0, sizeof(sa6));
-    sa6.sin6_family = AF_INET6;
-    sa6.sin6_port   = htons(listen_port);
-    sa6.sin6_addr   = in6addr_any;
-    if (bind(fd, (struct sockaddr *)&sa6, sizeof(sa6)) < 0) {
-      bm_log_error("udp_tunnel: bind(IPv6, :%u) failed: %s",
-                   (unsigned)listen_port, strerror(errno));
-      close(fd);
-      return -1;
-    }
+  // Open an IPv4 UDP socket bound to listen_port on all interfaces.
+  // Tailscale uses 100.64.0.0/10 (IPv4) so AF_INET is always correct.
+  // A dual-stack AF_INET6 socket causes sendto(EINVAL) when the resolved
+  // peer address is AF_INET, and receives frames as ::ffff:x.x.x.x which
+  // breaks peer lookup.
+  int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (fd < 0) {
+    bm_log_error("udp_tunnel: socket() failed: %s", strerror(errno));
+    return -1;
+  }
+  struct sockaddr_in sa4;
+  memset(&sa4, 0, sizeof(sa4));
+  sa4.sin_family      = AF_INET;
+  sa4.sin_port        = htons(listen_port);
+  sa4.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(fd, (struct sockaddr *)&sa4, sizeof(sa4)) < 0) {
+    bm_log_error("udp_tunnel: bind(:%u) failed: %s",
+                 (unsigned)listen_port, strerror(errno));
+    close(fd);
+    return -1;
   }
 
   // 1-second RX timeout so the RX thread wakes periodically to check rx_running.
