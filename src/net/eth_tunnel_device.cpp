@@ -35,7 +35,7 @@ static void etd_tunnel_link_change(uint8_t port_idx, bool is_up) {
 /// Tunnel receive wrapper — adjusts 1-based tunnel-local port_num to the
 /// composite device's 1-based port number by adding the eth port offset.
 /// Without this, bm_l2 would think tunnel frames arrived on eth port 1.
-static void etd_tunnel_receive(uint8_t port_num, const uint8_t *data, size_t len) {
+static void etd_tunnel_receive(uint8_t port_num, uint8_t *data, size_t len) {
   if (s_etd.callbacks.receive) {
     s_etd.callbacks.receive((uint8_t)(s_etd.eth_ports + port_num), data, len);
   }
