@@ -79,12 +79,14 @@ add_library(bm_sbc_core STATIC
   src/net/virtual_port_device.cpp
   src/net/gateway_device.cpp
   src/net/gateway_ipc.cpp
-  src/net/raw_eth_device.cpp
+  src/net/udp_tunnel_device.cpp
+  $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/src/net/raw_eth_device.cpp>
   src/transports/uart_l2/cobs.c
   src/transports/uart_l2/crc32c.c
   src/transports/uart_l2/frame_codec.c
   src/transports/uart_l2/uart_l2_transport.cpp
-  src/transports/raw_eth/raw_eth_transport.cpp
+  src/transports/udp_tunnel/udp_tunnel_transport.cpp
+  $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/src/transports/raw_eth/raw_eth_transport.cpp>
 )
 
 target_include_directories(bm_sbc_core
@@ -93,7 +95,8 @@ target_include_directories(bm_sbc_core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/linux
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net
     ${CMAKE_CURRENT_SOURCE_DIR}/src/transports/uart_l2
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/transports/raw_eth
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/transports/udp_tunnel
+    $<$<PLATFORM_ID:Linux>:${CMAKE_CURRENT_SOURCE_DIR}/src/transports/raw_eth>
 )
 
 target_include_directories(bm_sbc_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)

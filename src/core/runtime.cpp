@@ -4,9 +4,12 @@
 #include "gateway_device.h"
 #include "pcap_file_sink.h"
 #include "platform_linux.h"
+#ifdef __linux__
 #include "raw_eth_device.h"
+#endif
 #include "timer_callback_handler.h"
 #include "uart_l2_transport.h"
+#include "udp_tunnel_device.h"
 #include "virtual_port_device.h"
 // topology.h, bm_service.h, l2.h, pubsub.h have extern "C" guards.
 // device.h, bm_ip.h, bcmp.h, middleware.h do not — wrap them explicitly.
@@ -48,6 +51,9 @@ static const char *k_usage =
     "  --eth1       <iface>   Network interface for ADIN2111 port 2 (optional).\n"
     "  --pcap       <path>    Write captured L2 frames to a pcap file.\n"
     "\n"
+    "  --tunnel-peer <node_id@ip:port>  UDP tunnel peer (repeat up to 4 times).\n"
+    "                         e.g. --tunnel-peer deadbeef01020304@100.94.12.77:4844\n"
+    "  --tunnel-port <port>   Local UDP port to listen on (default: 4844).\n"
     "  --log-dir    <path>    Log file directory (default: /var/log/bm_sbc).\n"
     "  --log-level  <level>   Minimum log level: "
     "trace/debug/info/warn/error/fatal\n"
@@ -101,7 +107,8 @@ static int load_init_file(const char *path, VirtualPortCfg *vpc,
                           char *pcap_path, size_t pcap_path_sz, char *log_dir,
                           size_t log_dir_sz, int *log_level, bool *log_stdout,
                           char *eth0_iface, size_t eth0_sz,
-                          char *eth1_iface, size_t eth1_sz) {
+                          char *eth1_iface, size_t eth1_sz,
+                          UdpTunnelDeviceCfg *tunnel_cfg) {
   toml_result_t res = toml_parse_file_ex(path);
   if (!res.ok) {
     fprintf(stderr, "bm_sbc: TOML parse error in %s: %s\n", path, res.errmsg);
@@ -213,6 +220,46 @@ static int load_init_file(const char *path, VirtualPortCfg *vpc,
     eth1_iface[eth1_sz - 1] = '\0';
   }
 
+  // tunnel-port (int)
+  d = toml_get(root, "tunnel-port");
+  if (d.type == TOML_INT64) {
+    if (d.u.int64 > 0 && d.u.int64 <= 65535) {
+      tunnel_cfg->listen_port = (uint16_t)d.u.int64;
+    }
+  }
+
+  // tunnel-peers (array of inline tables {node-id, ip, port})
+  // Each entry: { node-id = "deadbeef01020304", ip = "100.94.12.77", port = 4844 }
+  toml_datum_t tp_arr = toml_get(root, "tunnel-peers");
+  if (tp_arr.type == TOML_ARRAY) {
+    for (int i = 0; i < tp_arr.u.arr.size; i++) {
+      if (tunnel_cfg->num_peers >= UDP_TUNNEL_MAX_PEERS) {
+        fprintf(stderr, "bm_sbc: too many tunnel-peers in %s (max %d)\n", path,
+                UDP_TUNNEL_MAX_PEERS);
+        break;
+      }
+      toml_datum_t elem = tp_arr.u.arr.elem[i];
+      if (elem.type != TOML_TABLE) { continue; }
+      UdpTunnelPeerCfg *peer = &tunnel_cfg->peers[tunnel_cfg->num_peers];
+      toml_datum_t nid = toml_get(elem, "node-id");
+      toml_datum_t ip  = toml_get(elem, "ip");
+      toml_datum_t prt = toml_get(elem, "port");
+      if (nid.type != TOML_STRING || ip.type != TOML_STRING) {
+        fprintf(stderr, "bm_sbc: tunnel-peers[%d] missing node-id or ip in %s\n", i, path);
+        continue;
+      }
+      if (!parse_hex64(nid.u.s, &peer->node_id)) {
+        fprintf(stderr, "bm_sbc: invalid node-id in tunnel-peers[%d]: %s\n", i, nid.u.s);
+        continue;
+      }
+      strncpy(peer->ip, ip.u.s, sizeof(peer->ip) - 1);
+      peer->port = (prt.type == TOML_INT64 && prt.u.int64 > 0 && prt.u.int64 <= 65535)
+                     ? (uint16_t)prt.u.int64
+                     : UDP_TUNNEL_DEFAULT_PORT;
+      tunnel_cfg->num_peers++;
+    }
+  }
+
   toml_free(res);
   return 0;
 }
@@ -264,6 +311,9 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   int baud_rate = 115200;
   char eth0_iface[IFNAMSIZ] = {0};
   char eth1_iface[IFNAMSIZ] = {0};
+  UdpTunnelDeviceCfg tunnel_cfg;
+  memset(&tunnel_cfg, 0, sizeof(tunnel_cfg));
+  tunnel_cfg.listen_port = UDP_TUNNEL_DEFAULT_PORT;
   char init_path[512] = {0};
   char log_dir[256] = {0};
   int log_level = -1; // -1 = not set
@@ -292,6 +342,8 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
       {"baud", required_argument, NULL, 'b'},
       {"eth0", required_argument, NULL, 'e'},
       {"eth1", required_argument, NULL, 'E'},
+      {"tunnel-peer", required_argument, NULL, 'T'},
+      {"tunnel-port", required_argument, NULL, 'P'},
       {"pcap", required_argument, NULL, 'w'},
       {"log-dir", required_argument, NULL, 'd'},
       {"log-level", required_argument, NULL, 'l'},
@@ -360,6 +412,59 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
       strncpy(eth1_iface, optarg, sizeof(eth1_iface) - 1);
       break;
     }
+    case 'T': {
+      // Format: <hex_node_id>@<ip>:<port>  e.g. deadbeef01020304@100.94.12.77:4844
+      if (tunnel_cfg.num_peers >= UDP_TUNNEL_MAX_PEERS) {
+        fprintf(stderr, "bm_sbc: too many --tunnel-peer flags (max %d); ignoring %s\n",
+                UDP_TUNNEL_MAX_PEERS, optarg);
+        break;
+      }
+      char tmp[128];
+      strncpy(tmp, optarg, sizeof(tmp) - 1);
+      tmp[sizeof(tmp) - 1] = '\0';
+      char *at = strchr(tmp, '@');
+      if (!at) {
+        fprintf(stderr, "bm_sbc: --tunnel-peer must be node_id@ip:port, got: %s\n", optarg);
+        return 1;
+      }
+      *at = '\0';
+      const char *id_str = tmp;
+      char *addr_str = at + 1;
+      // Find last colon for port (handles IPv6 addresses).
+      char *last_colon = strrchr(addr_str, ':');
+      if (!last_colon) {
+        fprintf(stderr, "bm_sbc: --tunnel-peer missing port in '%s'\n", optarg);
+        return 1;
+      }
+      *last_colon = '\0';
+      const char *ip_str   = addr_str;
+      const char *port_str = last_colon + 1;
+      UdpTunnelPeerCfg *peer = &tunnel_cfg.peers[tunnel_cfg.num_peers];
+      if (!parse_hex64(id_str, &peer->node_id)) {
+        fprintf(stderr, "bm_sbc: invalid node_id in --tunnel-peer: %s\n", id_str);
+        return 1;
+      }
+      strncpy(peer->ip, ip_str, sizeof(peer->ip) - 1);
+      char *pend = NULL;
+      long pval = strtol(port_str, &pend, 10);
+      if (!pend || *pend != '\0' || pval <= 0 || pval > 65535) {
+        fprintf(stderr, "bm_sbc: invalid port in --tunnel-peer: %s\n", port_str);
+        return 1;
+      }
+      peer->port = (uint16_t)pval;
+      tunnel_cfg.num_peers++;
+      break;
+    }
+    case 'P': {
+      char *end = NULL;
+      long pval = strtol(optarg, &end, 10);
+      if (!end || *end != '\0' || pval <= 0 || pval > 65535) {
+        fprintf(stderr, "bm_sbc: invalid --tunnel-port value: %s\n", optarg);
+        return 1;
+      }
+      tunnel_cfg.listen_port = (uint16_t)pval;
+      break;
+    }
     case 'w': {
       strncpy(pcap_path, optarg, sizeof(pcap_path) - 1);
       break;
@@ -408,6 +513,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     strncpy(cli_eth0_iface, eth0_iface, sizeof(cli_eth0_iface));
     char cli_eth1_iface[IFNAMSIZ];
     strncpy(cli_eth1_iface, eth1_iface, sizeof(cli_eth1_iface));
+    UdpTunnelDeviceCfg cli_tunnel_cfg = tunnel_cfg;
     char cli_pcap_path[256];
     strncpy(cli_pcap_path, pcap_path, sizeof(cli_pcap_path));
     char cli_log_dir[256];
@@ -426,6 +532,8 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     baud_rate = 115200;
     memset(eth0_iface, 0, sizeof(eth0_iface));
     memset(eth1_iface, 0, sizeof(eth1_iface));
+    memset(&tunnel_cfg, 0, sizeof(tunnel_cfg));
+    tunnel_cfg.listen_port = UDP_TUNNEL_DEFAULT_PORT;
     memset(log_dir, 0, sizeof(log_dir));
     log_level = -1;
     log_stdout_flag = false;
@@ -435,7 +543,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
                             &baud_rate, pcap_path, sizeof(pcap_path), log_dir,
                             sizeof(log_dir), &log_level, &log_stdout_flag,
                             eth0_iface, sizeof(eth0_iface),
-                            eth1_iface, sizeof(eth1_iface));
+                            eth1_iface, sizeof(eth1_iface), &tunnel_cfg);
     if (rc != 0) {
       return rc;
     }
@@ -479,6 +587,9 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     if (cli_eth1_iface[0] != '\0') {
       strncpy(eth1_iface, cli_eth1_iface, sizeof(eth1_iface) - 1);
     }
+    if (cli_tunnel_cfg.num_peers > 0) {
+      tunnel_cfg = cli_tunnel_cfg;
+    }
   }
 
   if (!node_id_set) {
@@ -506,15 +617,21 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
 
   // --- First structured log line ------------------------------------------
   bool gateway_mode = (uart_path[0] != '\0');
-  bool eth_mode = (eth0_iface[0] != '\0');
-  if (gateway_mode && eth_mode) {
-    fprintf(stderr, "bm_sbc: --uart and --eth0 are mutually exclusive\n");
+  bool eth_mode     = (eth0_iface[0] != '\0');
+  bool tunnel_mode  = (tunnel_cfg.num_peers > 0);
+  int active_modes  = (int)gateway_mode + (int)eth_mode + (int)tunnel_mode;
+  if (active_modes > 1) {
+    fprintf(stderr, "bm_sbc: --uart, --eth0, and --tunnel-peer are mutually exclusive\n");
     return 1;
   }
   if (eth_mode) {
     bm_log_info("node_id=0x%016" PRIx64 " eth0=%s%s%s", vpc.own_node_id,
                 eth0_iface, eth1_iface[0] ? " eth1=" : "",
                 eth1_iface[0] ? eth1_iface : "");
+  } else if (tunnel_mode) {
+    bm_log_info("node_id=0x%016" PRIx64 " tunnel peers=%u listen_port=%u",
+                vpc.own_node_id, (unsigned)tunnel_cfg.num_peers,
+                (unsigned)tunnel_cfg.listen_port);
   } else {
     bm_log_info("node_id=0x%016" PRIx64 " peers=%u socket_dir=%s%s%s",
                 vpc.own_node_id, (unsigned)vpc.num_peers, vpc.socket_dir,
@@ -556,6 +673,7 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     }
     net_dev = gateway_device_get(&vpd_dev);
   } else if (eth_mode) {
+#ifdef __linux__
     // Raw Ethernet mode: ADIN2111 exposed as Linux network interfaces.
     RawEthDeviceCfg eth_cfg;
     memset(&eth_cfg, 0, sizeof(eth_cfg));
@@ -568,6 +686,13 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
       eth_cfg.num_ports = 2;
     }
     net_dev = raw_eth_device_get(&eth_cfg);
+#else
+    fprintf(stderr, "bm_sbc: --eth0 is only supported on Linux\n");
+    return 1;
+#endif
+  } else if (tunnel_mode) {
+    // UDP tunnel mode: BM frames wrapped in unicast UDP (WiFi, Tailscale, etc.)
+    net_dev = udp_tunnel_device_get(&tunnel_cfg);
   } else {
     // Normal mode: VPD only.
     NetworkDevice vpd_dev = virtual_port_device_get(&vpc);
