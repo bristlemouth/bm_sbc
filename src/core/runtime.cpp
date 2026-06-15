@@ -24,6 +24,34 @@ extern "C" {
 #include "sys_info_service.h"
 }
 #include "git_sha.h"
+
+// Version info struct scanned by the DFU host to discover gitSHA and version
+// before sending BcmpDfuStart. Magic and layout must match bm_protocol's
+// versionInfo_t (see bm_protocol/src/lib/common/version.h) and the scanner
+// in bm_core/test/scripts/test_dfu.py.
+#define VERSION_INFO_MAGIC UINT64_C(0xDF7F9AFDEC06627C)
+typedef struct __attribute__((__packed__)) {
+  uint64_t magic;
+  uint32_t gitSHA;
+  uint8_t  maj;
+  uint8_t  min;
+  uint8_t  rev;
+  uint8_t  hwVersion;
+} VersionInfo_t;
+
+#ifdef __linux__
+__attribute__((used, section(".rodata")))
+#else
+__attribute__((used))
+#endif
+static const VersionInfo_t k_version_info = {
+  .magic     = VERSION_INFO_MAGIC,
+  .gitSHA    = BM_SBC_GIT_SHA,
+  .maj       = BM_SBC_VERSION_MAJOR,
+  .min       = BM_SBC_VERSION_MINOR,
+  .rev       = BM_SBC_VERSION_PATCH,
+  .hwVersion = 0,
+};
 #include "tomlc17.h"
 #include <getopt.h>
 #include <stdio.h>
