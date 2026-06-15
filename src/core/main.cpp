@@ -1,5 +1,6 @@
 #include "app_runner.h"
 #include "bm_log.h"
+#include "platform_linux.h"
 #include "runtime.h"
 
 #ifndef BM_SBC_APP_NAME
@@ -18,6 +19,7 @@ __attribute__((used))
 static const char k_image_marker[] = "BM_SBC_IMAGE:" BM_SBC_APP_NAME;
 
 int main(int argc, char **argv) {
+  platform_linux_set_argv(argc, argv);
   int rc = bm_sbc_runtime_init(argc, argv, BM_SBC_APP_NAME);
   if (rc != 0) {
     return rc;
