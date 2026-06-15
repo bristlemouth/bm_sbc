@@ -1,0 +1,38 @@
+[Unit]
+Description=Bristlemouth SBC Gateway
+After=network.target
+
+[Service]
+Type=simple
+# The gateway runs as root so it can write to /usr/local/bin/ during a DFU
+# binary swap (link/rename require write permission on the directory).
+# If the binary is ever moved to a user-writable location, add User= here.
+WorkingDirectory=/usr/local/bin
+
+# DFU rollback guard: runs before each start to detect crash loops and
+# restore the previous binary if the new one fails to confirm within
+# MAX_ATTEMPTS systemd-managed starts.
+# ExecStartPre and ExecStart paths are set to ${CMAKE_INSTALL_PREFIX}/bin
+# (default: /usr/local/bin). If borealis_sbc installs to a different prefix,
+# update the two paths below accordingly, or configure this file as a
+# cmake .in template.
+ExecStartPre=/usr/local/bin/dfu_prestart.sh
+
+ExecStart=/usr/local/bin/bm_sbc_gateway --init /etc/bm_sbc/gateway.toml
+
+# Restart on failure so systemd-managed restarts increment the DFU attempt
+# counter in dfu_prestart.sh and eventually trigger rollback.
+Restart=on-failure
+
+# Allow up to 5 restarts in 60 s before giving up entirely.
+StartLimitBurst=5
+StartLimitIntervalSec=60s
+
+# Watchdog: kills and restarts the process if it hangs without confirming
+# the DFU update (i.e. stops calling sd_notify WATCHDOG=1).
+# NOTE: requires the application to call sd_notify(0, "WATCHDOG=1") on a
+# regular basis — see the TODO in platform_linux.cpp.
+# WatchdogSec=30s
+
+[Install]
+WantedBy=multi-user.target
