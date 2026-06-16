@@ -37,3 +37,12 @@ void platform_linux_set_argv(int argc, char **argv);
 /// sees DFU_REBOOT_MAGIC on the first run after a successful binary swap.
 void platform_linux_dfu_restore_state(void);
 
+/// Register a callback invoked immediately before execv() in both
+/// set_pending_and_reset() and fail_update_and_reset().
+/// Use this for application-level cleanup that must happen before the process
+/// image is replaced (e.g. stopping systemd services started by sbc_command).
+/// Only one callback is supported; calling this again replaces the previous one.
+/// The callback must not call any bm_log functions (logging is already shut
+/// down at the call site) but may call system() or other libc functions.
+void platform_linux_set_pre_exec_cb(void (*cb)(void));
+

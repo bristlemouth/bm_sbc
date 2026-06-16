@@ -256,6 +256,7 @@ static char   s_backup_path[PATH_MAX]  = {0};
 static char   s_marker_path[PATH_MAX]  = {0};
 static int    s_dfu_fd                 = -1;
 static char **s_saved_argv             = NULL;
+static void (*s_pre_exec_cb)(void)     = NULL;
 // Sentinel used as the flash_area opaque handle (address passed to callers).
 static int    s_flash_area_tag         = 0;
 
@@ -383,6 +384,10 @@ static bool validate_staging_marker(void) {
                  expected);
   }
   return found;
+}
+
+void platform_linux_set_pre_exec_cb(void (*cb)(void)) {
+  s_pre_exec_cb = cb;
 }
 
 // Close all fds > 2 before execv() to avoid leaking UART/socket fds.
@@ -536,6 +541,7 @@ BmErr bm_dfu_client_set_pending_and_reset(void) {
 
   // 6. Replace this process image with the new binary (transparent to systemd).
   bm_log_info("dfu set_pending: binary swapped, restarting via execv");
+  if (s_pre_exec_cb) { s_pre_exec_cb(); }
   bm_log_shutdown();
   close_fds_above_stderr();
   execv(s_install_path, s_saved_argv);
@@ -575,6 +581,7 @@ BmErr bm_dfu_client_fail_update_and_reset(void) {
 
   unlink(s_marker_path);
   bm_log_info("dfu fail_update: restarting via execv");
+  if (s_pre_exec_cb) { s_pre_exec_cb(); }
   bm_log_shutdown();
   close_fds_above_stderr();
   execv(s_install_path, s_saved_argv);

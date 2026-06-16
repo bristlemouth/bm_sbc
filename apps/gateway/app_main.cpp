@@ -1,4 +1,5 @@
 #include "bm_log.h"
+#include "platform_linux.h"
 extern "C" {
   #include "bm_common_pub_sub.h"
   #include "bm_os.h"
@@ -81,6 +82,37 @@ static void await_uart_neighbor(void) {
 }
 
 /**************** SBC command ****************/
+static char s_sbc_undo_command[MAX_STR_LEN_BYTES] = "";
+
+static void sbc_undo_cb(void) {
+  if (s_sbc_undo_command[0] != '\0') {
+    // Do not use bm_log here — logging is shut down at the call site.
+    fprintf(stderr, "DFU pre-exec: stopping services: %s\n",
+            s_sbc_undo_command);
+    system(s_sbc_undo_command);
+  }
+}
+
+// Derive a "stop" command from a "start" command and register it as the
+// pre-exec cleanup hook.  Handles the common pattern:
+//   [exec] systemctl start <service> [<service>...]
+// Any other command shape is ignored (no undo registered).
+static void register_sbc_undo(const char *cmd) {
+  // Strip optional leading "exec ".
+  const char *p = cmd;
+  if (strncmp(p, "exec ", 5) == 0) {
+    p += 5;
+  }
+  while (*p == ' ') { ++p; } // skip any extra spaces
+
+  if (strncmp(p, "systemctl start ", 16) == 0) {
+    snprintf(s_sbc_undo_command, sizeof(s_sbc_undo_command),
+             "systemctl stop %s", p + 16);
+    platform_linux_set_pre_exec_cb(sbc_undo_cb);
+    bm_log_info("DFU undo registered: %s", s_sbc_undo_command);
+  }
+}
+
 static void run_sbc_command(void) {
   static bool sbc_command_ran = false;
 
@@ -94,6 +126,9 @@ static void run_sbc_command(void) {
       bm_log_error("sbc_command exited %d", WEXITSTATUS(status));
     } else if (WIFSIGNALED(status)) {
       bm_log_error("sbc_command killed by signal %d", WTERMSIG(status));
+    } else {
+      // Command ran successfully — register the undo for DFU pre-exec cleanup.
+      register_sbc_undo(CONTEXT.sbc_command);
     }
   }
 }
