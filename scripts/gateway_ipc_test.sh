@@ -161,7 +161,7 @@ check "spotter_log with file + timestamp"   "IPC RX spotter_log data_len=5 file_
 check "spotter_log minimal (no file/ts)"    "IPC RX spotter_log data_len=14 file_name='' print_timestamp=0"
 check "spotter_tx iridium_fallback=1"       "IPC RX spotter_tx data_len=4 iridium_fallback=1"
 check "spotter_tx cellular-only default"    "IPC RX spotter_tx data_len=2 iridium_fallback=0"
-check "sensor_data topic construction"      "IPC RX sensor_data topic='sensor/0000000000000001/temperature' data_len=3"
+check "sensor_data topic construction"      "IPC RX sensor_data topic='sensor/deadbeefdeadbeef/temperature' data_len=3"
 
 check "config_set string"                   "IPC config_set key='wifi_ssid' value(str)='mynet'"
 check "config_set uint"                     "IPC config_set key='baud' value(uint)=115200"

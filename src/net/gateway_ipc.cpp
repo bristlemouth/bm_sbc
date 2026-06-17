@@ -356,7 +356,7 @@ void handle_sensor_data(const CborValue *map) {
     return;
   }
   char topic[MAX_TOPIC_LEN + 1] = {0};
-  int n = snprintf(topic, sizeof(topic), SENSOR_TOPIC_PREFIX_FMT, node_id());
+  int n = snprintf(topic, sizeof(topic), SENSOR_TOPIC_PREFIX_FMT, mote_node_id);
   if (n < 0 || static_cast<size_t>(n) != SENSOR_TOPIC_PREFIX_LEN) {
     bm_log_warn("IPC sensor_data: failed to format topic prefix");
     return;
