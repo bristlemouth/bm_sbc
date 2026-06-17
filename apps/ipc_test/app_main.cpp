@@ -5,7 +5,7 @@
 #include "bm_log.h"
 #include "gateway_ipc.h"
 
-#define MOTE_NODE_ID (0xDEADBEEF)
+#define MOTE_NODE_ID (0xDEADBEEFDEADBEEF)
 
 void setup(void) {
   if (gateway_ipc_init(MOTE_NODE_ID) != 0) {
