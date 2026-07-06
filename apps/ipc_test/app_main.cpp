@@ -5,8 +5,10 @@
 #include "bm_log.h"
 #include "gateway_ipc.h"
 
+#define MOTE_NODE_ID (0xDEADBEEFDEADBEEF)
+
 void setup(void) {
-  if (gateway_ipc_init(0) != 0) {
+  if (gateway_ipc_init(MOTE_NODE_ID) != 0) {
     bm_log_fatal("ipc_test: gateway_ipc_init failed");
   }
 }
