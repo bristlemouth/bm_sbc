@@ -1,5 +1,4 @@
 #include "bm_log.h"
-#include "platform_linux.h"
 extern "C" {
   #include "bm_common_pub_sub.h"
   #include "bm_os.h"
@@ -14,6 +13,7 @@ extern "C" {
 #include "cbor.h"
 #include "gateway_device.h"
 #include "gateway_ipc.h"
+#include "runtime.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdio>
@@ -108,7 +108,7 @@ static void register_sbc_undo(const char *cmd) {
   if (strncmp(p, "systemctl start ", 16) == 0) {
     snprintf(s_sbc_undo_command, sizeof(s_sbc_undo_command),
              "systemctl stop %s", p + 16);
-    platform_linux_set_pre_exec_cb(sbc_undo_cb);
+    bm_sbc_runtime_set_pre_exec_cb(sbc_undo_cb);
     bm_log_info("DFU undo registered: %s", s_sbc_undo_command);
   }
 }
