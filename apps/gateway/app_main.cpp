@@ -254,7 +254,7 @@ static inline bool save_init_backup(void) {
   return copy_file(INIT_LOG_PATH, BACKUP_INIT_LOG_PATH);
 }
 
-static inline void restore_backup(void) {
+static inline bool restore_backup(void) {
   return copy_file(BACKUP_INIT_LOG_PATH, INIT_LOG_PATH);
 }
 
