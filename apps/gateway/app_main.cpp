@@ -239,6 +239,7 @@ static bool copy_file(const char *src, const char *dest) {
     return false;
   }
 
+  char c;
   while ((c = fgetc(sp)) != EOF) {
     fputc(c, dp);
   }
