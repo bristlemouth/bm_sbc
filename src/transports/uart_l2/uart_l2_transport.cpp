@@ -141,6 +141,7 @@ static void *rx_thread_func(void *arg) {
 
   uint8_t read_buf[256];
   uint8_t l2_frame[FRAME_CODEC_MAX_L2_SIZE];
+  size_t decode_error_count = 0;
 
   while (s_rx_running) {
     ssize_t n = read(s_fd, read_buf, sizeof(read_buf));
@@ -161,6 +162,8 @@ static void *rx_thread_func(void *arg) {
               frame_decode(l2_frame, sizeof(l2_frame), accum, accum_len);
           if (l2_len > 0) {
             s_rx_cb(l2_frame, l2_len, s_rx_ctx);
+          } else {
+            bm_log_error("uart_l2: decode error, count - %d", ++decode_error_count);
           }
           // else: CRC/length error — silently drop
         }
