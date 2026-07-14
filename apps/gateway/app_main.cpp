@@ -1,4 +1,4 @@
-boollude "bm_log.h"
+#include "bm_log.h"
 extern "C" {
 #include "bm_common_pub_sub.h"
 #include "bm_os.h"
