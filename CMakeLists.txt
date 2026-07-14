@@ -151,8 +151,6 @@ if(APP)
   if(APP STREQUAL "gateway")
     install(PROGRAMS deploy/dfu_prestart.sh
       DESTINATION ${CMAKE_INSTALL_BINDIR})
-    install(FILES deploy/bm_sbc_gateway.service
-      DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/systemd/system)
   endif()
 
   set(_BM_APP_SUMMARY "${APP}")
