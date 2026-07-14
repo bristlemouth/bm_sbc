@@ -1,4 +1,4 @@
-#include "bm_log.h"
+boollude "bm_log.h"
 extern "C" {
 #include "bm_common_pub_sub.h"
 #include "bm_os.h"
@@ -239,7 +239,7 @@ static bool copy_file(const char *src, const char *dest) {
     return false;
   }
 
-  char c;
+  int c;
   while ((c = fgetc(sp)) != EOF) {
     fputc(c, dp);
   }
