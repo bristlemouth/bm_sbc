@@ -466,6 +466,8 @@ BmErr bm_dfu_client_flash_area_erase(const void *flash_area, uint32_t off,
                                               : (uint32_t)sizeof(k_zeros);
     ssize_t w = pwrite(s_dfu_fd, k_zeros, (size_t)chunk, cur);
     if (w != (ssize_t)chunk) {
+      bm_log_error("bm_dfu_client_flash_area_erase: pwrite failed: %s",
+                    strerror(errno));
       return BmEIO;
     }
     cur += (off_t)chunk;
