@@ -1,4 +1,4 @@
-#include <stdlib.h>
+#include <stdint.h>
 #include "git_sha.h"
 
 #ifndef BM_SBC_APP_NAME
