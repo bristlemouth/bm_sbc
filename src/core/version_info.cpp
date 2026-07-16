@@ -16,6 +16,14 @@ __attribute__((used))
 #endif
 static const char k_image_marker[] = "BM_SBC_IMAGE:" BM_SBC_APP_NAME;
 
+
+// This version info data is currently not used by the bm_sbc apps.
+// However, it is included specifically for bm dfu processes that will
+// scan the binary for this magic number to then extract the version
+// info struct. This struct is then used to populate the start
+// messages for the bm dfu process, allowing for a cancellation of
+// the update if the version or gitsha already match
+// (assuming the force flag is not used).
 #define VERSION_INFO_MAGIC UINT64_C(0xDF7F9AFDEC06627C)
 
 typedef struct {
