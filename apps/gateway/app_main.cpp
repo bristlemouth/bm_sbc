@@ -19,10 +19,13 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
+#include <filesystem>
 #include <string>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+
+using namespace std::filesystem;
 
 #define SBC_COMMAND_KEY "sbc_command"
 #define SBC_COMMAND_KEY_LEN (sizeof(SBC_COMMAND_KEY) - 1)
@@ -225,37 +228,15 @@ static bool write_cbor_value(FILE *fp, CborValue *value) {
   }
 }
 
-static bool copy_file(const char *src, const char *dest) {
-  FILE *sp = fopen(src, "r");
-  if (!sp) {
-    bm_log_error("Failed to open %s for reading", src);
-    return false;
-  }
-
-  FILE *dp = fopen(dest, "w");
-  if (!dp) {
-    fclose(sp);
-    bm_log_error("Failed to open %s for writing", dest);
-    return false;
-  }
-
-  int c;
-  while ((c = fgetc(sp)) != EOF) {
-    fputc(c, dp);
-  }
-
-  fclose(sp);
-  fclose(dp);
-
-  return true;
-}
-
 static inline bool save_init_backup(void) {
   return copy_file(INIT_LOG_PATH, BACKUP_INIT_LOG_PATH);
 }
 
 static inline bool restore_backup(void) {
-  return copy_file(BACKUP_INIT_LOG_PATH, INIT_LOG_PATH);
+  if (exists(BACKUP_INIT_LOG_PATH)) {
+    return copy_file(BACKUP_INIT_LOG_PATH, INIT_LOG_PATH);
+  }
+  return false;
 }
 
 static bool write_init_log_file(const uint8_t *cbor_data, size_t cbor_len) {
