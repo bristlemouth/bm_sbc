@@ -75,7 +75,6 @@ add_library(bm_sbc_core STATIC
   src/core/runtime.cpp
   src/core/app_runner.cpp
   src/core/pcap_file_sink.cpp
-  src/core/version_info.cpp
   src/platform/linux/platform_linux.cpp
   src/net/virtual_port_device.cpp
   src/net/gateway_device.cpp
@@ -120,6 +119,7 @@ function(build_app APP_NAME)
   set(APP_TARGET bm_sbc_${APP_NAME})
   add_executable(${APP_TARGET}
     src/core/main.cpp
+    src/core/version_info.cpp
     ${APP_SOURCES}
   )
 
@@ -135,7 +135,11 @@ function(build_app APP_NAME)
     "$<$<PLATFORM_ID:Linux>:-Wl,--pop-state>"
   )
   target_compile_definitions(${APP_TARGET} PRIVATE BM_SBC_APP_NAME="${APP_NAME}")
-  target_include_directories(${APP_TARGET} PRIVATE ${APP_DIR})
+  target_include_directories(${APP_TARGET} PRIVATE
+    ${APP_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
+  )
+  add_dependencies(${APP_TARGET} git_sha_header)
 endfunction()
 
 # --- Single-app mode ---
