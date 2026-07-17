@@ -13,6 +13,8 @@
 #   bm_sbc_gateway.bak — hard link to the previous binary; deleted by set_confirmed()
 #   dfu_attempts.txt   — plain-text boot-attempt counter; managed entirely by this script
 
+echo "dfu_prestart.sh running"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL="$SCRIPT_DIR/bm_sbc_gateway"
 BAK="$SCRIPT_DIR/bm_sbc_gateway.bak"
@@ -33,12 +35,12 @@ echo "$attempts" > "$ATTEMPTS_FILE"
 
 # If we have exceeded the limit, roll back to the previous binary.
 if [ "$attempts" -gt "$MAX_ATTEMPTS" ]; then
-    echo "dfu_prestart: $attempts failed attempts, rolling back" >&2
+    echo "dfu_prestart: $attempts failed attempts, rolling back"
     if [ -f "$BAK" ]; then
         mv "$BAK" "$INSTALL"
         chmod 755 "$INSTALL"
     else
-        echo "dfu_prestart: no .bak found, staying with current binary" >&2
+        echo "dfu_prestart: no .bak found, staying with current binary"
     fi
     rm -f "$MARKER" "$ATTEMPTS_FILE"
 fi
