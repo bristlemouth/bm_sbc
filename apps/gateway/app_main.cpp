@@ -229,12 +229,14 @@ static bool write_cbor_value(FILE *fp, CborValue *value) {
 }
 
 static inline bool save_init_backup(void) {
-  return copy_file(INIT_LOG_PATH, BACKUP_INIT_LOG_PATH);
+  return copy_file(INIT_LOG_PATH, BACKUP_INIT_LOG_PATH,
+                   copy_options::overwrite_existing);
 }
 
 static inline bool restore_backup(void) {
   if (exists(BACKUP_INIT_LOG_PATH)) {
-    return copy_file(BACKUP_INIT_LOG_PATH, INIT_LOG_PATH);
+    return copy_file(BACKUP_INIT_LOG_PATH, INIT_LOG_PATH,
+                     copy_options::overwrite_existing);
   }
   return false;
 }
