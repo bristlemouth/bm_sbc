@@ -521,6 +521,9 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
 
   bm_err_check(err, timer_callback_handler_init());
   bm_err_check(err, bm_ip_init());
+  // Restore client_update_reboot_info from the DFU marker file (if present)
+  // so bm_dfu_init() inside bcmp_init() sees DFU_REBOOT_MAGIC on post-swap boot.
+  platform_linux_dfu_restore_state();
   bm_err_check(err, bcmp_init(net_dev));
   uint8_t total_ports = net_dev.trait->num_ports();
   bm_err_check(err, topology_init(total_ports));
@@ -538,4 +541,12 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   }
   bm_log_info("stack initialized");
   return 0;
+}
+
+void bm_sbc_runtime_set_pre_exec_cb(void (*cb)(void)) {
+    platform_linux_set_pre_exec_cb(cb);
+}
+
+void bm_sbc_runtime_set_argv(int argc, char **argv){
+  platform_linux_set_argv(argc, argv);
 }

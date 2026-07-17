@@ -119,6 +119,7 @@ function(build_app APP_NAME)
   set(APP_TARGET bm_sbc_${APP_NAME})
   add_executable(${APP_TARGET}
     src/core/main.cpp
+    src/core/version_info.cpp
     ${APP_SOURCES}
   )
 
@@ -134,7 +135,11 @@ function(build_app APP_NAME)
     "$<$<PLATFORM_ID:Linux>:-Wl,--pop-state>"
   )
   target_compile_definitions(${APP_TARGET} PRIVATE BM_SBC_APP_NAME="${APP_NAME}")
-  target_include_directories(${APP_TARGET} PRIVATE ${APP_DIR})
+  target_include_directories(${APP_TARGET} PRIVATE
+    ${APP_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
+  )
+  add_dependencies(${APP_TARGET} git_sha_header)
 endfunction()
 
 # --- Single-app mode ---
@@ -146,6 +151,12 @@ if(APP)
 
   install(TARGETS bm_sbc_${APP}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+  # Install DFU support files alongside the gateway binary.
+  if(APP STREQUAL "gateway")
+    install(PROGRAMS deploy/dfu_prestart.sh
+      DESTINATION ${CMAKE_INSTALL_BINDIR})
+  endif()
 
   set(_BM_APP_SUMMARY "${APP}")
 
@@ -208,4 +219,3 @@ target_include_directories(test_frame_codec PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/transports/uart_l2
 )
 add_test(NAME frame_codec COMMAND test_frame_codec)
-
