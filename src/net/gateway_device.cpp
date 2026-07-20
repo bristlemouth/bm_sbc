@@ -3,6 +3,7 @@
 #include "messages/neighbors.h"
 #include "uart_l2_transport.h"
 #include "virtual_port_device.h"
+#include "l2.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -175,6 +176,12 @@ NetworkDevice gateway_device_get(NetworkDevice *vpd_dev) {
 
 void gateway_uart_rx_cb(const uint8_t *frame, size_t len, void *ctx) {
   (void)ctx;
+
+  // If the port is down, but we have received bytes, link up
+  if (!bm_l2_get_port_state(GATEWAY_UART_PORT - 1)) {
+    bm_l2_netif_enable_disable_port(GATEWAY_UART_PORT, true);
+  }
+
   if (s_gw.vpd.callbacks->receive && len > 0) {
     // Deliver the UART frame to the stack as arriving on the UART port.
     // The receive callback expects a non-const pointer (legacy API).

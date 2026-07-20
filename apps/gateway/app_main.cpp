@@ -1,14 +1,14 @@
 #include "bm_log.h"
 extern "C" {
-  #include "bm_common_pub_sub.h"
-  #include "bm_os.h"
-  #include "config_cbor_map_service.h"
-  #include "config_cbor_map_srv_reply_msg.h"
-  #include "pubsub.h"
-  #include "sys_info_service.h"
-  #include "sys_info_svc_reply_msg.h"
-  #include "messages/config.h"
-  #include "messages/neighbors.h"
+#include "bm_common_pub_sub.h"
+#include "bm_os.h"
+#include "config_cbor_map_service.h"
+#include "config_cbor_map_srv_reply_msg.h"
+#include "messages/config.h"
+#include "messages/neighbors.h"
+#include "pubsub.h"
+#include "sys_info_service.h"
+#include "sys_info_svc_reply_msg.h"
 }
 #include "cbor.h"
 #include "gateway_device.h"
@@ -20,10 +20,13 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
+#include <filesystem>
 #include <string>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+
+using namespace std::filesystem;
 
 #define SBC_COMMAND_KEY "sbc_command"
 #define SBC_COMMAND_KEY_LEN (sizeof(SBC_COMMAND_KEY) - 1)
@@ -32,6 +35,7 @@ extern "C" {
 #define WIFI_ENABLED_KEY_LEN (sizeof(WIFI_ENABLED_KEY) - 1)
 
 #define INIT_LOG_PATH "/var/run/bristlemouth_init_log.txt"
+#define BACKUP_INIT_LOG_PATH "/etc/bm_sbc/gateway/bristlemouth_init_log.txt.bak"
 #define INIT_LOG_TMP_PATH INIT_LOG_PATH ".tmp"
 #define CONFIG_MAP_REQUEST_TIMEOUT_S 2
 
@@ -116,7 +120,8 @@ static void register_sbc_undo(const char *cmd) {
 static void run_sbc_command(void) {
   static bool sbc_command_ran = false;
 
-  if (CONTEXT.system_time_synced && !sbc_command_ran && CONTEXT.sbc_command_received) {
+  if (CONTEXT.system_time_synced && !sbc_command_ran &&
+      CONTEXT.sbc_command_received) {
     bm_log_info("Running sbc_command: %s", CONTEXT.sbc_command);
     const int status = system(CONTEXT.sbc_command);
     sbc_command_ran = true;
@@ -258,6 +263,19 @@ static bool write_cbor_value(FILE *fp, CborValue *value) {
   }
 }
 
+static inline bool save_init_backup(void) {
+  return copy_file(INIT_LOG_PATH, BACKUP_INIT_LOG_PATH,
+                   copy_options::overwrite_existing);
+}
+
+static inline bool restore_backup(void) {
+  if (exists(BACKUP_INIT_LOG_PATH)) {
+    return copy_file(BACKUP_INIT_LOG_PATH, INIT_LOG_PATH,
+                     copy_options::overwrite_existing);
+  }
+  return false;
+}
+
 static bool write_init_log_file(const uint8_t *cbor_data, size_t cbor_len) {
   CborParser parser;
   CborValue map;
@@ -328,6 +346,8 @@ static bool write_init_log_file(const uint8_t *cbor_data, size_t cbor_len) {
     return false;
   }
 
+  save_init_backup();
+
   bm_log_info("Wrote mote system configs to %s", INIT_LOG_PATH);
   return true;
 }
@@ -393,7 +413,7 @@ static void wait_for_config_map_reply(void) {
 }
 
 static void get_mote_system_configs(void) {
-  int8_t retries_remaining = 3;
+  int8_t retries_remaining = 5;
   while (!CONTEXT.config_map_received && retries_remaining > 0) {
     send_config_map_request();
     wait_for_config_map_reply();
@@ -401,8 +421,9 @@ static void get_mote_system_configs(void) {
   }
   if (!CONTEXT.config_map_received) {
     bm_log_warn("Could not retrieve mote system configs; "
-                "leaving %s untouched",
-                INIT_LOG_PATH);
+                "copying backup at %s to %s",
+                BACKUP_INIT_LOG_PATH, INIT_LOG_PATH);
+    restore_backup();
   }
 }
 
@@ -568,7 +589,7 @@ static bool nmea_checksum_valid(char *line, size_t len) {
   uint8_t checksum = 0;
   uint32_t idx = 1;
 
-  while((idx < len) && ('*' != line[idx])) {
+  while ((idx < len) && ('*' != line[idx])) {
     checksum ^= (uint8_t)line[idx];
     idx++;
   }
@@ -580,7 +601,8 @@ static bool nmea_checksum_valid(char *line, size_t len) {
   return true;
 }
 
-static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output) {
+static bool parse_nmea_rmc(char *line, size_t len,
+                           struct timespec *time_output) {
   bool success = false;
 
   do {
@@ -602,7 +624,8 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
     //   0=$GPRMC, 1=HHMMSS.ss, 2=A/V, 3=lat, 4=N/S, 5=lon, 6=E/W,
     //   7=speed, 8=course, 9=DDMMYY, ...
     // We are only interested in fields 1 and 9.
-    // Details for the rest can be found here: https://gpsd.gitlab.io/gpsd/NMEA.html#_rmc_recommended_minimum_navigation_information
+    // Details for the rest can be found here:
+    // https://gpsd.gitlab.io/gpsd/NMEA.html#_rmc_recommended_minimum_navigation_information
     char *fields[MAX_NMEA_FIELDS];
     int field_idx = 0;
     fields[field_idx++] = line;
@@ -627,14 +650,14 @@ static bool parse_nmea_rmc(char *line, size_t len, struct timespec *time_output)
     }
 
     struct tm datetime = {
-      .tm_sec = sec,
-      .tm_min = min,
-      .tm_hour = hour,
-      .tm_mday = day,
-      .tm_mon = mon - 1,
-      // GPS year is 2 digits. tm_year is (year - 1900).
-      // So we do gps_year + 2000 - 1900 -> + 100
-      .tm_year = year + 100,
+        .tm_sec = sec,
+        .tm_min = min,
+        .tm_hour = hour,
+        .tm_mday = day,
+        .tm_mon = mon - 1,
+        // GPS year is 2 digits. tm_year is (year - 1900).
+        // So we do gps_year + 2000 - 1900 -> + 100
+        .tm_year = year + 100,
     };
 
     time_t epoch = timegm(&datetime); // Get UTC Epoch
@@ -669,8 +692,8 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
   if (!CONTEXT.system_time_synced.load()) {
 
     struct timespec unixtime = {
-      .tv_sec = 0,
-      .tv_nsec = 0,
+        .tv_sec = 0,
+        .tv_nsec = 0,
     };
 
     if (!parse_nmea_rmc((char *)data, data_len, &unixtime)) {
@@ -707,7 +730,7 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
 #endif
 
 static unsigned char hex_byte(unsigned char c) {
-    return (c >= 10) ? ('A' + (c - 10)) : ('0' + c);
+  return (c >= 10) ? ('A' + (c - 10)) : ('0' + c);
 }
 
 static void utc_callback(uint64_t node_id, const char *topic,
@@ -717,8 +740,7 @@ static void utc_callback(uint64_t node_id, const char *topic,
   (void)topic;
   (void)topic_len;
 
-  if (type != 1 || version != 1 ||
-      data_len < sizeof(bm_common_pub_sub_utc_t)) {
+  if (type != 1 || version != 1 || data_len < sizeof(bm_common_pub_sub_utc_t)) {
     return;
   }
 
@@ -727,8 +749,8 @@ static void utc_callback(uint64_t node_id, const char *topic,
   if (!CONTEXT.system_time_synced.load()) {
 
     struct timespec unixtime = {
-      .tv_sec = 0,
-      .tv_nsec = 0,
+        .tv_sec = 0,
+        .tv_nsec = 0,
     };
 
     // parse the spotter/utc-time message and set unix time to it
@@ -785,7 +807,8 @@ static void utc_callback(uint64_t node_id, const char *topic,
 
   /* compute checksum of portion of buffer between $ and *, not inclusive */
   unsigned int cksum = 0;
-  for (const unsigned char * c = (const unsigned char *)fake_gpzda + 1; *c != '*'; c++) {
+  for (const unsigned char *c = (const unsigned char *)fake_gpzda + 1;
+       *c != '*'; c++) {
     cksum ^= *c;
   }
 
@@ -793,8 +816,9 @@ static void utc_callback(uint64_t node_id, const char *topic,
   fake_gpzda[35] = hex_byte(cksum % 16U);
 
   if (CONTEXT.last_rmc_time <= 0 || (time(NULL) - CONTEXT.last_rmc_time > 30)) {
-    ssize_t bytes_sent = sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, strlen(fake_gpzda), 0,
-                              (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
+    ssize_t bytes_sent =
+        sendto(CONTEXT.gps_udp_socket_fd, fake_gpzda, strlen(fake_gpzda), 0,
+               (struct sockaddr *)&GPS_DEST, sizeof(GPS_DEST));
     if (bytes_sent == -1) {
       bm_log_error("Fake GPS ZDA sendto failed: %s", strerror(errno));
     }
