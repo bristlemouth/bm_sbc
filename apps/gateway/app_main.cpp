@@ -13,6 +13,7 @@ extern "C" {
 #include "cbor.h"
 #include "gateway_device.h"
 #include "gateway_ipc.h"
+#include "nmea_rmc.h"
 #include "runtime.h"
 #include <arpa/inet.h>
 #include <atomic>
@@ -21,8 +22,10 @@ extern "C" {
 #include <cstring>
 #include <errno.h>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <sys/socket.h>
+#include <system_error>
 #include <time.h>
 #include <unistd.h>
 
@@ -117,14 +120,23 @@ static void register_sbc_undo(const char *cmd) {
   }
 }
 
+// Guards CONTEXT.sbc_command and the run-once flag.  The command is written
+// by the BCMP reply thread and read here from the middleware (pubsub) thread,
+// so without this the string can be read mid-copy and system() can be entered
+// twice concurrently.
+static std::mutex s_sbc_mutex;
+
 static void run_sbc_command(void) {
+  std::lock_guard<std::mutex> lock(s_sbc_mutex);
   static bool sbc_command_ran = false;
 
   if (CONTEXT.system_time_synced && !sbc_command_ran &&
       CONTEXT.sbc_command_received) {
+    // Claim the run before releasing the CPU to system(); no other thread may
+    // enter this block again.
+    sbc_command_ran = true;
     bm_log_info("Running sbc_command: %s", CONTEXT.sbc_command);
     const int status = system(CONTEXT.sbc_command);
-    sbc_command_ran = true;
     if (status == -1) {
       bm_log_error("Failed to run sbc_command: %s", strerror(errno));
     } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
@@ -143,16 +155,32 @@ static BmErr sbc_command_reply_cb(uint8_t *payload) {
   if (payload) {
     BmConfigValue *msg = reinterpret_cast<BmConfigValue *>(payload);
     static char sbc_command[1024];
-    size_t sbc_command_len = sizeof(sbc_command);
-    memset(sbc_command, 0, sbc_command_len);
+    // Reserve the last byte: bcmp_config_decode_value NUL-terminates at
+    // buf[*buf_length] after a successful decode.
+    size_t sbc_command_len = sizeof(sbc_command) - 1;
+    memset(sbc_command, 0, sizeof(sbc_command));
     err = bcmp_config_decode_value(STR, msg->data, msg->data_length,
                                    sbc_command, &sbc_command_len);
     if (err == BmOK) {
       if (sbc_command_len > 0) {
         bm_log_info("Received sbc command: %.*s", (int)sbc_command_len,
                     sbc_command);
-        CONTEXT.sbc_command_received = true;
-        memcpy(CONTEXT.sbc_command, sbc_command, sbc_command_len);
+        // The length comes off the wire, so clamp it: CONTEXT.sbc_command is
+        // far smaller than the decode buffer.  Terminate explicitly so a
+        // shorter command can never inherit the tail of a longer one.
+        const size_t max_len = sizeof(CONTEXT.sbc_command) - 1;
+        const size_t copy_len =
+            (sbc_command_len > max_len) ? max_len : sbc_command_len;
+        if (copy_len < sbc_command_len) {
+          bm_log_warn("sbc_command truncated from %zu to %zu bytes",
+                      sbc_command_len, copy_len);
+        }
+        {
+          std::lock_guard<std::mutex> lock(s_sbc_mutex);
+          memcpy(CONTEXT.sbc_command, sbc_command, copy_len);
+          CONTEXT.sbc_command[copy_len] = '\0';
+          CONTEXT.sbc_command_received = true;
+        }
         // Will run the sbc command if the time is synced
         run_sbc_command();
       }
@@ -263,17 +291,37 @@ static bool write_cbor_value(FILE *fp, CborValue *value) {
   }
 }
 
+// The std::error_code overloads are used throughout: the throwing overloads
+// would abort the process, since these run on stack callback threads and
+// nothing in the app catches exceptions.
 static inline bool save_init_backup(void) {
-  return copy_file(INIT_LOG_PATH, BACKUP_INIT_LOG_PATH,
-                   copy_options::overwrite_existing);
+  std::error_code ec;
+  // The backup directory is not created by packaging — make it on demand
+  // rather than failing the backup forever.
+  create_directories(path(BACKUP_INIT_LOG_PATH).parent_path(), ec);
+  copy_file(INIT_LOG_PATH, BACKUP_INIT_LOG_PATH,
+            copy_options::overwrite_existing, ec);
+  if (ec) {
+    bm_log_warn("Failed to back up %s to %s: %s", INIT_LOG_PATH,
+                BACKUP_INIT_LOG_PATH, ec.message().c_str());
+    return false;
+  }
+  return true;
 }
 
 static inline bool restore_backup(void) {
-  if (exists(BACKUP_INIT_LOG_PATH)) {
-    return copy_file(BACKUP_INIT_LOG_PATH, INIT_LOG_PATH,
-                     copy_options::overwrite_existing);
+  std::error_code ec;
+  if (!exists(BACKUP_INIT_LOG_PATH, ec)) {
+    return false;
   }
-  return false;
+  copy_file(BACKUP_INIT_LOG_PATH, INIT_LOG_PATH,
+            copy_options::overwrite_existing, ec);
+  if (ec) {
+    bm_log_warn("Failed to restore %s from %s: %s", INIT_LOG_PATH,
+                BACKUP_INIT_LOG_PATH, ec.message().c_str());
+    return false;
+  }
+  return true;
 }
 
 static bool write_init_log_file(const uint8_t *cbor_data, size_t cbor_len) {
@@ -582,99 +630,6 @@ static void get_wifi_enable(void) {
   }
 }
 
-#define MAX_NMEA_RMC_LEN 82
-#define MAX_NMEA_FIELDS 14
-
-static bool nmea_checksum_valid(char *line, size_t len) {
-  uint8_t checksum = 0;
-  uint32_t idx = 1;
-
-  while ((idx < len) && ('*' != line[idx])) {
-    checksum ^= (uint8_t)line[idx];
-    idx++;
-  }
-  uint8_t line_checksum = strtoul(&line[idx + 1], NULL, 16);
-
-  if (checksum != line_checksum) {
-    return false;
-  }
-  return true;
-}
-
-static bool parse_nmea_rmc(char *line, size_t len,
-                           struct timespec *time_output) {
-  bool success = false;
-
-  do {
-
-    if (!line || len > MAX_NMEA_RMC_LEN) {
-      bm_log_error("Invalid NMEA RMC string");
-      break;
-    }
-
-    if (!nmea_checksum_valid(line, len)) {
-      bm_log_error("Invalid checksum");
-      break;
-    }
-
-    // Make sure the line is NULL terminated
-    line[len] = '\0';
-    // Here we will break the NMEA RMC into fields, splitting on the ',' or '*'.
-    // The fields will be:
-    //   0=$GPRMC, 1=HHMMSS.ss, 2=A/V, 3=lat, 4=N/S, 5=lon, 6=E/W,
-    //   7=speed, 8=course, 9=DDMMYY, ...
-    // We are only interested in fields 1 and 9.
-    // Details for the rest can be found here:
-    // https://gpsd.gitlab.io/gpsd/NMEA.html#_rmc_recommended_minimum_navigation_information
-    char *fields[MAX_NMEA_FIELDS];
-    int field_idx = 0;
-    fields[field_idx++] = line;
-    for (size_t i = 0; i < len && field_idx < 12; i++) {
-      if (line[i] == ',' || line[i] == '*') {
-        line[i] = '\0';
-        // Point the field at the first char after the ',' or '*'.
-        fields[field_idx++] = &line[i + 1];
-      }
-    }
-
-    int hour, min, sec, centisec = 0;
-    if (sscanf(fields[1], "%2d%2d%2d.%2d", &hour, &min, &sec, &centisec) != 4) {
-      bm_log_error("Failed to get HHMMSS.ss");
-      break;
-    }
-
-    int day, mon, year = 0;
-    if (sscanf(fields[9], "%2d%2d%2d", &day, &mon, &year) != 3) {
-      bm_log_error("Failed to get DDMMYY");
-      break;
-    }
-
-    struct tm datetime = {
-        .tm_sec = sec,
-        .tm_min = min,
-        .tm_hour = hour,
-        .tm_mday = day,
-        .tm_mon = mon - 1,
-        // GPS year is 2 digits. tm_year is (year - 1900).
-        // So we do gps_year + 2000 - 1900 -> + 100
-        .tm_year = year + 100,
-    };
-
-    time_t epoch = timegm(&datetime); // Get UTC Epoch
-    if (epoch == (time_t)-1) {
-      bm_log_error("Failed to convert date time to epoch");
-      break;
-    }
-
-    time_output->tv_sec = epoch;
-    time_output->tv_nsec = (long)centisec * 10000000L;
-
-    success = true;
-  } while (0);
-
-  return success;
-}
-
 static bool sync_time(struct timespec *time) {
   bm_log_info("Syncing to unixtime %ld : %ld", time->tv_sec, time->tv_nsec);
   if (clock_settime(CLOCK_REALTIME, time) == 0) {
@@ -696,7 +651,7 @@ static void gprmc_callback(uint64_t node_id, const char *topic,
         .tv_nsec = 0,
     };
 
-    if (!parse_nmea_rmc((char *)data, data_len, &unixtime)) {
+    if (!nmea_rmc_parse((const char *)data, data_len, &unixtime)) {
       bm_log_error("Failed to parse NMEA RMC string");
       return;
     }

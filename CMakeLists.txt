@@ -79,6 +79,7 @@ add_library(bm_sbc_core STATIC
   src/net/virtual_port_device.cpp
   src/net/gateway_device.cpp
   src/net/gateway_ipc.cpp
+  src/net/nmea_rmc.c
   src/transports/uart_l2/cobs.c
   src/transports/uart_l2/crc32c.c
   src/transports/uart_l2/frame_codec.c
@@ -219,3 +220,14 @@ target_include_directories(test_frame_codec PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/transports/uart_l2
 )
 add_test(NAME frame_codec COMMAND test_frame_codec)
+
+add_executable(test_nmea_rmc
+  tests/test_nmea_rmc.c
+  src/net/nmea_rmc.c
+  src/core/bm_log.c
+)
+target_include_directories(test_nmea_rmc PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/net
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+)
+add_test(NAME nmea_rmc COMMAND test_nmea_rmc)
