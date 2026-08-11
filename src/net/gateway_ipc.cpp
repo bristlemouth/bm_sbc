@@ -373,8 +373,7 @@ void handle_sensor_data(const CborValue *map) {
 
   bm_log_info("IPC RX sensor_data topic='%s' data_len=%zu", topic, data_len);
 
-  BmErr err = bm_pub(topic, data, static_cast<uint16_t>(data_len), 0,
-                     BM_COMMON_PUB_SUB_VERSION);
+  BmErr err = bm_pub(topic, data, static_cast<uint16_t>(data_len), 1, 1);
   if (err != BmOK) {
     bm_log_warn("IPC sensor_data: bm_pub(%s) failed, err=%d", topic, err);
   }
