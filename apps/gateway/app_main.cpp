@@ -663,6 +663,9 @@ static void delete_wifi_credential(std::string &cred) {
 
   // Reboot once confirmed that mote has deleted the keys
   if (!CONTEXT.wifi_password.size() && !CONTEXT.wifi_ssid.size()) {
+    BmErr err;
+    bcmp_config_commit(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER, &err);
+    sleep(3);
     bm_log_info("Rebooting now with new user wifi credentials");
     system("systemctl reboot");
   }
@@ -744,7 +747,8 @@ static BmErr wifi_password_cb(uint8_t *payload) {
 }
 
 static void get_wifi_credentials(void) {
-  bm_log_debug("Ticks before bcmp config get: %u", bm_get_tick_count());
+  bm_log_debug("Ticks before bcmp config get in %s: %u", __func__,
+               bm_get_tick_count());
   BmErr err = BmOK;
   bcmp_config_get(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
                   WIFI_SSID_KEY_LEN, WIFI_SSID_KEY, &err, wifi_ssid_cb);
@@ -1004,6 +1008,7 @@ void setup(void) {
   bm_sub("gps-nmea/rmc", gprmc_callback);
   bm_sub("spotter/utc-time", utc_callback);
   await_uart_neighbor();
+  get_wifi_credentials();
   get_mote_app_name();
   get_mote_system_configs();
   get_sbc_command();
