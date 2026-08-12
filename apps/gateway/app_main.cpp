@@ -34,6 +34,12 @@ using namespace std::filesystem;
 #define WIFI_ENABLED_KEY "wifi_enabled"
 #define WIFI_ENABLED_KEY_LEN (sizeof(WIFI_ENABLED_KEY) - 1)
 
+#define WIFI_SSID_KEY "wifi_ssid"
+#define WIFI_SSID_KEY_LEN (sizeof(WIFI_SSID_KEY) - 1)
+
+#define WIFI_PASS_KEY "wifi_password"
+#define WIFI_PASS_KEY_LEN (sizeof(WIFI_PASS_KEY) - 1)
+
 #define INIT_LOG_PATH "/var/run/bristlemouth_init_log.txt"
 #define BACKUP_INIT_LOG_PATH "/etc/bm_sbc/gateway/bristlemouth_init_log.txt.bak"
 #define INIT_LOG_TMP_PATH INIT_LOG_PATH ".tmp"
@@ -57,6 +63,8 @@ static struct {
   std::atomic<bool> system_time_synced = false;
   time_t last_rmc_time = 0;
   uint32_t wifi_enabled = 1;
+  std::string wifi_ssid;
+  std::string wifi_password;
 } CONTEXT;
 
 static void neighbor_cb(BcmpNeighbor *neighbor) {
@@ -107,7 +115,9 @@ static void register_sbc_undo(const char *cmd) {
   if (strncmp(p, "exec ", 5) == 0) {
     p += 5;
   }
-  while (*p == ' ') { ++p; } // skip any extra spaces
+  while (*p == ' ') {
+    ++p;
+  } // skip any extra spaces
 
   if (strncmp(p, "systemctl start ", 16) == 0) {
     snprintf(s_sbc_undo_command, sizeof(s_sbc_undo_command),
@@ -580,6 +590,164 @@ static void get_wifi_enable(void) {
                 wifi_driver_dependency_command.c_str());
     system(wifi_driver_dependency_command.c_str());
   }
+}
+
+static const std::string connection_name = "user-wifi";
+
+static int run(const std::vector<const char *> &args) {
+  // Prevent command injection from system() by utilizing execvp
+  std::vector<char *> argv;
+  for (auto *a : args) {
+    argv.push_back(const_cast<char *>(a));
+  }
+  argv.push_back(nullptr);
+
+  pid_t pid = fork();
+  if (pid < 0)
+    return -1;
+  if (pid == 0) {
+    execvp(args[0], argv.data());
+    _exit(127);
+  }
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0)
+    return -1;
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static bool copy_connections(void) {
+  static const path connection_location =
+      "/etc/NetworkManager/system-connections/";
+  static const path backup_location = "/etc/wifi_backup";
+  std::error_code ec;
+
+  if (!is_directory(backup_location)) {
+    create_directory(backup_location, ec);
+    if (ec) {
+      bm_log_error("Could not create backup directory, err: %s",
+                   ec.message().c_str());
+      return false;
+    }
+    permissions(backup_location, perms::owner_all, ec);
+    if (ec) {
+      bm_log_error("Could not update backup location permissions, err: %s",
+                   ec.message().c_str());
+      return false;
+    }
+  }
+
+  bool ret = false;
+
+  for (const auto &e : directory_iterator(connection_location)) {
+    if (e.path().filename().string().rfind(connection_name, 0) == 0 &&
+        e.path().extension() == ".nmconnection") {
+      copy_file(e, backup_location / e.path().filename(),
+                copy_options::overwrite_existing, ec);
+      if (ec) {
+        ret = false;
+        bm_log_error("Could not copy backup connection, err: %s",
+                     ec.message().c_str());
+        break;
+      }
+      ret = true;
+    }
+  }
+
+  return ret;
+}
+
+static void delete_wifi_credential(std::string &cred) {
+  cred.erase();
+
+  // Reboot once confirmed that mote has deleted the keys
+  if (!CONTEXT.wifi_password.size() && !CONTEXT.wifi_ssid.size()) {
+    bm_log_info("Rebooting now with new user wifi credentials");
+    system("systemctl reboot");
+  }
+}
+
+static BmErr wifi_delete_ssid_cb(uint8_t *payload) {
+  (void)payload;
+  delete_wifi_credential(CONTEXT.wifi_ssid);
+  return BmOK;
+}
+
+static BmErr wifi_delete_password_cb(uint8_t *payload) {
+  (void)payload;
+  delete_wifi_credential(CONTEXT.wifi_password);
+  return BmOK;
+}
+
+static BmErr set_wifi_credential(std::string &cred, uint8_t *payload) {
+  bm_log_debug("Ticks in %s reply cb: %u", __func__, bm_get_tick_count());
+
+  if (!payload) {
+    return BmENODATA;
+  }
+  BmErr err;
+  BmConfigValue *msg = reinterpret_cast<BmConfigValue *>(payload);
+  size_t str_len = msg->data_length;
+
+  // Allocate memory to string and decode
+  cred.reserve(str_len);
+  err = bcmp_config_decode_value(STR, msg->data, msg->data_length, cred.data(),
+                                 &str_len);
+  if (err != BmOK) {
+    cred.erase();
+    bm_log_error("Failed to decode bcmp value in %s, err=%d", __func__, err);
+    return err;
+  }
+
+  if (str_len > 0) {
+    bm_log_info("Received credential of length %zu", str_len);
+  }
+
+  // If both SSID and password are available create a new network manager
+  // connection.
+  if (CONTEXT.wifi_password.size() && CONTEXT.wifi_ssid.size()) {
+
+    // Remove any existing wifi credentials and then add the new one
+    run({"nmcli", "connection", "delete", connection_name.c_str()});
+    int ret = run({"nmcli", "connection", "add", "type", "wifi", "ifname",
+                   "wlan0", "con-name", connection_name.c_str(), "ssid",
+                   CONTEXT.wifi_ssid.c_str(), "wifi-sec.key-mgmt",
+                   "wpa-psk wifi-sec.psk", CONTEXT.wifi_password.c_str()});
+    if (ret != 0) {
+      bm_log_error("Could not save wifi credentials, err: %d", ret);
+      return BmEBADMSG;
+    }
+
+    if (!copy_connections()) {
+      bm_log_error("Could not copy wifi credentials...");
+      return BmEBADMSG;
+    }
+
+    // Delete keys on mote now and reboot
+    bcmp_config_del_key(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
+                        WIFI_SSID_KEY_LEN, WIFI_SSID_KEY, wifi_delete_ssid_cb);
+    bcmp_config_del_key(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
+                        WIFI_PASS_KEY_LEN, WIFI_PASS_KEY,
+                        wifi_delete_password_cb);
+  }
+
+  return BmOK;
+}
+
+static BmErr wifi_ssid_cb(uint8_t *payload) {
+  return set_wifi_credential(CONTEXT.wifi_ssid, payload);
+}
+
+static BmErr wifi_password_cb(uint8_t *payload) {
+  return set_wifi_credential(CONTEXT.wifi_password, payload);
+}
+
+static void get_wifi_credentials(void) {
+  bm_log_debug("Ticks before bcmp config get: %u", bm_get_tick_count());
+  BmErr err = BmOK;
+  bcmp_config_get(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
+                  WIFI_SSID_KEY_LEN, WIFI_SSID_KEY, &err, wifi_ssid_cb);
+  bcmp_config_get(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
+                  WIFI_PASS_KEY_LEN, WIFI_PASS_KEY, &err, wifi_password_cb);
 }
 
 #define MAX_NMEA_RMC_LEN 82
