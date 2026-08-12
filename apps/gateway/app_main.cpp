@@ -23,6 +23,7 @@ extern "C" {
 #include <filesystem>
 #include <string>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <vector>
