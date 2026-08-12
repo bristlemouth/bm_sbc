@@ -694,7 +694,7 @@ static BmErr set_wifi_credential(std::string &cred, uint8_t *payload) {
   size_t str_len = msg->data_length;
 
   // Allocate memory to string and decode
-  cred.reserve(str_len);
+  cred.resize(str_len);
   err = bcmp_config_decode_value(STR, msg->data, msg->data_length, cred.data(),
                                  &str_len);
   if (err != BmOK) {
@@ -702,6 +702,7 @@ static BmErr set_wifi_credential(std::string &cred, uint8_t *payload) {
     bm_log_error("Failed to decode bcmp value in %s, err=%d", __func__, err);
     return err;
   }
+  cred.resize(str_len);
 
   if (str_len > 0) {
     bm_log_info("Received credential of length %zu", str_len);
