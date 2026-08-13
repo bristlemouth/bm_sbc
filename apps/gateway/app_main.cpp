@@ -14,6 +14,7 @@ extern "C" {
 #include "gateway_device.h"
 #include "gateway_ipc.h"
 #include "runtime.h"
+#include "safe_cmd.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdio>
@@ -21,12 +22,9 @@ extern "C" {
 #include <cstring>
 #include <errno.h>
 #include <filesystem>
-#include <string>
 #include <sys/socket.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include <vector>
 
 using namespace std::filesystem;
 
@@ -596,27 +594,6 @@ static void get_wifi_enable(void) {
 
 static const std::string connection_name = "user-wifi";
 
-static int run(const std::vector<const char *> &args) {
-  // Prevent command injection from system() by utilizing execvp
-  std::vector<char *> argv;
-  for (auto *a : args) {
-    argv.push_back(const_cast<char *>(a));
-  }
-  argv.push_back(nullptr);
-
-  pid_t pid = fork();
-  if (pid < 0)
-    return -1;
-  if (pid == 0) {
-    execvp(args[0], argv.data());
-    _exit(127);
-  }
-  int status = 0;
-  if (waitpid(pid, &status, 0) < 0)
-    return -1;
-  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
 static bool copy_connections(void) {
   static const path connection_location =
       "/etc/NetworkManager/system-connections/";
@@ -714,17 +691,18 @@ static BmErr set_wifi_credential(std::string &cred, uint8_t *payload) {
   }
 
   // If both SSID and password are available create a new network manager
-  // connection.
+  // connection
   if (CONTEXT.wifi_password.size() && CONTEXT.wifi_ssid.size()) {
 
     bm_log_info("Saving wifi credentials...");
 
     // Remove any existing wifi credentials and then add the new one
-    run({"nmcli", "connection", "delete", connection_name.c_str()});
-    int ret = run({"nmcli", "connection", "add", "type", "wifi", "ifname",
-                   "wlan0", "con-name", connection_name.c_str(), "ssid",
-                   CONTEXT.wifi_ssid.c_str(), "wifi-sec.key-mgmt", "wpa-psk",
-                   "wifi-sec.psk", CONTEXT.wifi_password.c_str()});
+    std::string cmd = "nmcli connection delete " + connection_name;
+    safe_cmd(cmd.c_str());
+    cmd = "nmcli connection add type wifi ifname wlan0 con-name " +
+          connection_name + " ssid " + CONTEXT.wifi_ssid +
+          " wifi-sec.key-mgmt wpa-psk wifi-sec.psk " + CONTEXT.wifi_password;
+    int ret = safe_cmd(cmd.c_str());
     if (ret != 0) {
       bm_log_error("Could not save wifi credentials, err: %d", ret);
       return BmEBADMSG;
@@ -756,7 +734,9 @@ static BmErr wifi_password_cb(uint8_t *payload) {
   return set_wifi_credential(CONTEXT.wifi_password, payload);
 }
 
-static void get_wifi_credentials(void) {
+static void get_wifi_credentials(BmTimer timer = nullptr) {
+  (void)timer;
+
   bm_log_debug("Ticks before bcmp config get in %s: %u", __func__,
                bm_get_tick_count());
   BmErr err = BmOK;
@@ -764,6 +744,27 @@ static void get_wifi_credentials(void) {
                   WIFI_SSID_KEY_LEN, WIFI_SSID_KEY, &err, wifi_ssid_cb);
   bcmp_config_get(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
                   WIFI_PASS_KEY_LEN, WIFI_PASS_KEY, &err, wifi_password_cb);
+}
+
+static void start_wifi_credentials_timer(void) {
+  static BmTimer timer = nullptr;
+
+  if (timer) {
+    return;
+  }
+
+  // See if credentials are there to begin with
+  get_wifi_credentials();
+
+  // Check for credentials every timer_ms
+  static constexpr uint32_t timer_ms = 10000;
+  static constexpr uint32_t timer_wait_ms = 10;
+  timer = bm_timer_create("creds", timer_ms, true, NULL, get_wifi_credentials);
+  if (!timer) {
+    return;
+  }
+
+  bm_timer_start(timer, timer_wait_ms);
 }
 
 #define MAX_NMEA_RMC_LEN 82
@@ -1022,7 +1023,7 @@ void setup(void) {
   get_mote_system_configs();
   get_sbc_command();
   get_wifi_enable();
-  get_wifi_credentials();
+  start_wifi_credentials_timer();
   gateway_ipc_init(CONTEXT.mote_node_id);
 }
 
