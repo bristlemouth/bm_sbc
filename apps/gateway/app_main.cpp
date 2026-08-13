@@ -712,12 +712,14 @@ static BmErr set_wifi_credential(std::string &cred, uint8_t *payload) {
   // connection.
   if (CONTEXT.wifi_password.size() && CONTEXT.wifi_ssid.size()) {
 
+    bm_log_info("Saving wifi credentials...");
+
     // Remove any existing wifi credentials and then add the new one
     run({"nmcli", "connection", "delete", connection_name.c_str()});
     int ret = run({"nmcli", "connection", "add", "type", "wifi", "ifname",
                    "wlan0", "con-name", connection_name.c_str(), "ssid",
-                   CONTEXT.wifi_ssid.c_str(), "wifi-sec.key-mgmt",
-                   "wpa-psk wifi-sec.psk", CONTEXT.wifi_password.c_str()});
+                   CONTEXT.wifi_ssid.c_str(), "wifi-sec.key-mgmt", "wpa-psk",
+                   "wifi-sec.psk", CONTEXT.wifi_password.c_str()});
     if (ret != 0) {
       bm_log_error("Could not save wifi credentials, err: %d", ret);
       return BmEBADMSG;
@@ -1009,11 +1011,11 @@ void setup(void) {
   bm_sub("gps-nmea/rmc", gprmc_callback);
   bm_sub("spotter/utc-time", utc_callback);
   await_uart_neighbor();
-  get_wifi_credentials();
   get_mote_app_name();
   get_mote_system_configs();
   get_sbc_command();
   get_wifi_enable();
+  get_wifi_credentials();
   gateway_ipc_init(CONTEXT.mote_node_id);
 }
 
