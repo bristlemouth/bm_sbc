@@ -20,6 +20,11 @@
 int safe_cmd(const char *cmd) {
   std::vector<char *> argv;
 
+  pid_t pid = fork();
+  if (pid < 0) {
+    return -1;
+  }
+
   // Copy string to local variable
   size_t cmd_len = strlen(cmd) + 1;
   char *local = static_cast<char *>(malloc(cmd_len));
@@ -28,26 +33,32 @@ int safe_cmd(const char *cmd) {
   }
   strncpy(local, cmd, cmd_len);
 
-  char *token = strtok(local, " ");
+  char *save = nullptr;
+  char *token = strtok_r(local, " ", &save);
   while (token) {
     argv.push_back(token);
-    token = strtok(NULL, " ");
+    token = strtok_r(NULL, " ", &save);
   }
   argv.push_back(nullptr);
 
-  free(local);
-
-  pid_t pid = fork();
-  if (pid < 0) {
+  if (argv.size() == 1) {
+    free(local);
     return -1;
   }
+
   if (pid == 0) {
     execvp(argv[0], argv.data());
-    _exit(127);
+    _exit(errno == ENOENT ? 127 : 126);
   }
+
   int status = 0;
-  if (waitpid(pid, &status, 0) < 0) {
+  pid_t r;
+  while ((r = waitpid(pid, &status, 0)) < 0 && errno == EINTR) {
+  }
+  free(local);
+  if (r < 0) {
     return -1;
   }
+
   return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
