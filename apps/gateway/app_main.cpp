@@ -663,7 +663,10 @@ static void delete_wifi_credential(std::string &cred) {
 
   // Reboot once confirmed that mote has deleted the keys
   if (!CONTEXT.wifi_password.size() && !CONTEXT.wifi_ssid.size()) {
+    // Flush all operations on filesystems
+    sync();
     BmErr err;
+    sleep(3);
     bcmp_config_commit(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER, &err);
     sleep(3);
     bm_log_info("Rebooting now with new user wifi credentials");
