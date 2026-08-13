@@ -742,10 +742,12 @@ static BmErr set_wifi_credential(std::string &cred, uint8_t *payload) {
 }
 
 static BmErr wifi_ssid_cb(uint8_t *payload) {
+  bm_log_debug("Ticks in %s: %u", __func__, bm_get_tick_count());
   return set_wifi_credential(CONTEXT.wifi_ssid, payload);
 }
 
 static BmErr wifi_password_cb(uint8_t *payload) {
+  bm_log_debug("Ticks in %s: %u", __func__, bm_get_tick_count());
   return set_wifi_credential(CONTEXT.wifi_password, payload);
 }
 
