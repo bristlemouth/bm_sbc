@@ -706,6 +706,8 @@ static BmErr set_wifi_credential(std::string &cred, uint8_t *payload) {
 
   if (str_len > 0) {
     bm_log_info("Received credential of length %zu", str_len);
+  } else {
+    bm_log_info("Failed to receive credentials, length %zu", str_len);
   }
 
   // If both SSID and password are available create a new network manager
