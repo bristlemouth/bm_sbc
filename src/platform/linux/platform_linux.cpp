@@ -430,7 +430,9 @@ BmErr bm_dfu_client_flash_area_open(const void **flash_area) {
   }
   *flash_area = &s_flash_area_tag;
 
-  sbc_critical_op(true);
+  // This is the first operation that occurs when performing a dfu,
+  // enter critical operational state here
+  sbc_critical_op(true, nullptr);
   return BmOK;
 }
 
@@ -569,8 +571,20 @@ BmErr bm_dfu_client_set_confirmed(void) {
   unlink(s_marker_path);
   unlink(s_backup_path);
 
-  sbc_critical_op(false);
+  sbc_critical_op(false, nullptr);
   return BmOK;
+}
+
+void bm_dfu_reset(bool reply_received) {
+  (void)reply_received;
+  unlink(s_marker_path);
+  bm_log_info("dfu fail_update: restarting via execv");
+  if (s_pre_exec_cb) { s_pre_exec_cb(); }
+  bm_log_shutdown();
+  close_fds_above_stderr();
+  execv(s_install_path, s_saved_argv);
+
+  bm_log_error("dfu fail_update: execv failed: %s", strerror(errno));
 }
 
 BmErr bm_dfu_client_fail_update_and_reset(void) {
@@ -591,15 +605,10 @@ BmErr bm_dfu_client_fail_update_and_reset(void) {
     }
   }
 
-  unlink(s_marker_path);
-  bm_log_info("dfu fail_update: restarting via execv");
-  if (s_pre_exec_cb) { s_pre_exec_cb(); }
-  bm_log_shutdown();
-  close_fds_above_stderr();
-  execv(s_install_path, s_saved_argv);
+  // Reset only when reply is received to our critical option or timeout
+  sbc_critical_op(false, bm_dfu_reset);
 
-  bm_log_error("dfu fail_update: execv failed: %s", strerror(errno));
-  return BmEIO;
+  return BmOK;
 }
 
 BmErr bm_dfu_host_get_chunk(uint32_t offset, uint8_t *buffer, size_t len,

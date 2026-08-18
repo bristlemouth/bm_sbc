@@ -1,3 +1,4 @@
+#include "critical_op.h"
 #include "bm_log.h"
 #include "bm_os.h"
 #include "bm_service_request.h"
@@ -17,6 +18,7 @@
 struct CriticalServiceCtx {
   BmSemaphore mut;
   BmTimer timer;
+  SbcCriticalOpCb cb;
   bool critical_status;
   uint8_t retry_count;
 };
@@ -35,7 +37,12 @@ static bool critical_service_request_cb(bool ack, uint32_t msg_id,
   bm_log_info("%s: received reply on service %.*s", __func__,
               (int)service_strlen, service);
 
-  bm_timer_stop(ctx.timer, TIMER_MAX_WAIT_MS);
+  if (ack) {
+    if (ctx.cb) {
+      ctx.cb(true);
+    }
+    bm_timer_stop(ctx.timer, TIMER_MAX_WAIT_MS);
+  }
 
   return true;
 }
@@ -62,13 +69,18 @@ static void send_request(bool critical) {
 static void critical_timer_cb(BmTimer timer) {
   (void)timer;
   bm_semaphore_take(ctx.mut, BM_MAX_DELAY_UINT32);
+  if (ctx.retry_count >= RETRY_SEND_MAX) {
+    if (ctx.cb) {
+      ctx.cb(false);
+    }
+    bm_timer_stop(ctx.timer, 0);
+    bm_semaphore_give(ctx.mut);
+    return;
+  }
   send_request(ctx.critical_status);
   ctx.retry_count++;
   bm_log_error("%s: retrying to send critical op status, count: %u", __func__,
                ctx.retry_count);
-  if (ctx.retry_count >= RETRY_SEND_MAX) {
-    bm_timer_stop(ctx.timer, 0);
-  }
   bm_semaphore_give(ctx.mut);
 }
 
@@ -83,8 +95,9 @@ static void critical_timer_cb(BmTimer timer) {
           the neighbor replies or a retry limit is reached.
 
  @param critical whether device is in a critical operation or not
+ @param cb callback which is invoked upon reply to request or timeout
  */
-void sbc_critical_op(bool critical) {
+void sbc_critical_op(bool critical, SbcCriticalOpCb cb) {
   if (!ctx.mut) {
     ctx.mut = bm_mutex_create();
     if (!ctx.mut) {
@@ -119,6 +132,7 @@ void sbc_critical_op(bool critical) {
   bm_timer_stop(ctx.timer, TIMER_MAX_WAIT_MS);
   ctx.critical_status = critical;
   ctx.retry_count = 0;
+  ctx.cb = cb;
   send_request(ctx.critical_status);
   bm_timer_start(ctx.timer, TIMER_MAX_WAIT_MS);
   bm_semaphore_give(ctx.mut);

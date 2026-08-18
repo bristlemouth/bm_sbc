@@ -5,7 +5,10 @@
 extern "C" {
 #endif
 
-void sbc_critical_op(bool critical);
+#include "util.h"
+
+typedef void (*SbcCriticalOpCb)(bool reply_received);
+void sbc_critical_op(bool critical, SbcCriticalOpCb cb);
 
 #ifdef __cplusplus
 }
