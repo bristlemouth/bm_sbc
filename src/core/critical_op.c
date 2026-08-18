@@ -115,19 +115,6 @@ void sbc_critical_op(bool critical, SbcCriticalOpCb cb) {
     }
   }
 
-  // Only enter critical mode if allowed
-  if (ctx.critical_status) {
-    if (critical) {
-      bm_log_info("%s: already in critical mode...", __func__);
-      return;
-    }
-  } else {
-    if (!critical) {
-      bm_log_info("%s: already not in critical mode...", __func__);
-      return;
-    }
-  }
-
   bm_semaphore_take(ctx.mut, BM_MAX_DELAY_UINT32);
   bm_timer_stop(ctx.timer, TIMER_MAX_WAIT_MS);
   ctx.critical_status = critical;
