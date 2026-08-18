@@ -540,6 +540,9 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     return (int)err;
   }
   bm_log_info("stack initialized");
+  
+  // Inform neighbor to exit any ongoing critical operations
+  sbc_critical_op(false);
   return 0;
 }
 

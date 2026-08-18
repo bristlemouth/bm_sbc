@@ -12,14 +12,16 @@
 #define TIMER_TIMEOUT_MS 2000
 #define SERVICE_REQUEST_TIMEOUT_S 1
 #define TIMER_MAX_WAIT_MS 5
+#define RETRY_SEND_MAX 3
 
 struct CriticalServiceCtx {
   BmSemaphore mut;
   BmTimer timer;
   bool critical_status;
+  uint8_t retry_count;
 };
 
-static struct CriticalServiceCtx ctx;
+static struct CriticalServiceCtx ctx = {0};
 
 static bool critical_service_request_cb(bool ack, uint32_t msg_id,
                                         size_t service_strlen,
@@ -61,6 +63,12 @@ static void critical_timer_cb(BmTimer timer) {
   (void)timer;
   bm_semaphore_take(ctx.mut, BM_MAX_DELAY_UINT32);
   send_request(ctx.critical_status);
+  ctx.retry_count++;
+  bm_log_error("%s: retrying to send critical op status, count: %u", __func__,
+               ctx.retry_count);
+  if (ctx.retry_count >= RETRY_SEND_MAX) {
+    bm_timer_stop(ctx.timer, 0);
+  }
   bm_semaphore_give(ctx.mut);
 }
 
@@ -72,7 +80,7 @@ static void critical_timer_cb(BmTimer timer) {
             borealis/{sbc_node_id}/critical
           This function will send a request on the aformentioned service,
           and attempt to send a request on that service every 2 seconds until
-          the neighbor replies.
+          the neighbor replies or a retry limit is reached.
 
  @param critical whether device is in a critical operation or not
  */
@@ -94,9 +102,23 @@ void sbc_critical_op(bool critical) {
     }
   }
 
+  bool enter_critical_allowed = !ctx.critical_status && critical;
+  bool exit_critical_allowed = ctx.critical_status && !critical;
+
+  if (!enter_critical_allowed) {
+    bm_log_info("%s: already in critical mode...", __func__);
+    return;
+  }
+
+  if (!exit_critical_allowed) {
+    bm_log_info("%s: already not in critical mode...", __func__);
+    return;
+  }
+
   bm_semaphore_take(ctx.mut, BM_MAX_DELAY_UINT32);
   bm_timer_stop(ctx.timer, TIMER_MAX_WAIT_MS);
   ctx.critical_status = critical;
+  ctx.retry_count = 0;
   send_request(ctx.critical_status);
   bm_timer_start(ctx.timer, TIMER_MAX_WAIT_MS);
   bm_semaphore_give(ctx.mut);
