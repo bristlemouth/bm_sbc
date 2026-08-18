@@ -635,64 +635,23 @@ static bool copy_connections(void) {
   return ret;
 }
 
-static void delete_wifi_credential(std::string &cred) {
-  cred.erase();
+static void get_wifi_credentials(BmTimer timer = nullptr) {
+  (void)timer;
 
-  // Reboot once confirmed that mote has deleted the keys
-  if (!CONTEXT.wifi_password.size() && !CONTEXT.wifi_ssid.size()) {
-    // Flush all operations on filesystems
-    sync();
-    BmErr err;
-    sleep(3);
-    bcmp_config_commit(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER, &err);
-    sleep(3);
-    bm_log_info("Rebooting now with new user wifi credentials");
-    system("systemctl reboot");
-  }
-}
-
-static BmErr wifi_delete_ssid_cb(uint8_t *payload) {
-  (void)payload;
-  delete_wifi_credential(CONTEXT.wifi_ssid);
-  return BmOK;
-}
-
-static BmErr wifi_delete_password_cb(uint8_t *payload) {
-  (void)payload;
-  delete_wifi_credential(CONTEXT.wifi_password);
-  return BmOK;
-}
-
-static BmErr set_wifi_credential(std::string &cred, uint8_t *payload) {
-  bm_log_debug("Ticks in %s reply cb: %u", __func__, bm_get_tick_count());
-
-  if (!payload) {
-    return BmENODATA;
-  }
-  BmErr err;
-  BmConfigValue *msg = reinterpret_cast<BmConfigValue *>(payload);
-  size_t str_len = msg->data_length;
-
-  // Allocate memory to string and decode
-  cred.resize(str_len);
-  err = bcmp_config_decode_value(STR, msg->data, msg->data_length, cred.data(),
-                                 &str_len);
-  if (err != BmOK) {
-    cred.erase();
-    bm_log_error("Failed to decode bcmp value in %s, err=%d", __func__, err);
-    return err;
-  }
-  cred.resize(str_len);
-
-  if (str_len > 0) {
-    bm_log_info("Received credential of length %zu", str_len);
-  } else {
-    bm_log_info("Failed to receive credentials, length %zu", str_len);
-  }
+  bm_log_debug("Ticks before bcmp config get in %s: %u", __func__,
+               bm_get_tick_count());
+  size_t ssid_size = CONTEXT.wifi_ssid.size();
+  bool has_ssid =
+      get_config_string(BM_CFG_PARTITION_USER, WIFI_SSID_KEY, WIFI_SSID_KEY_LEN,
+                        CONTEXT.wifi_ssid.data(), &ssid_size);
+  size_t password_size = CONTEXT.wifi_password.size();
+  bool has_password =
+      get_config_string(BM_CFG_PARTITION_USER, WIFI_PASS_KEY, WIFI_PASS_KEY_LEN,
+                        CONTEXT.wifi_password.data(), &password_size);
 
   // If both SSID and password are available create a new network manager
   // connection
-  if (CONTEXT.wifi_password.size() && CONTEXT.wifi_ssid.size()) {
+  if (has_ssid && has_password) {
 
     bm_log_info("Saving wifi credentials...");
 
@@ -705,45 +664,32 @@ static BmErr set_wifi_credential(std::string &cred, uint8_t *payload) {
     int ret = safe_cmd(cmd.c_str());
     if (ret != 0) {
       bm_log_error("Could not save wifi credentials, err: %d", ret);
-      return BmEBADMSG;
+      return;
     }
 
     if (!copy_connections()) {
       bm_log_error("Could not copy wifi credentials...");
-      return BmEBADMSG;
+      return;
     }
 
     // Delete keys on mote now and reboot
-    bcmp_config_del_key(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
-                        WIFI_SSID_KEY_LEN, WIFI_SSID_KEY, wifi_delete_ssid_cb);
-    bcmp_config_del_key(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
-                        WIFI_PASS_KEY_LEN, WIFI_PASS_KEY,
-                        wifi_delete_password_cb);
+    bool removed_ssid =
+        remove_key(BM_CFG_PARTITION_USER, WIFI_SSID_KEY, WIFI_SSID_KEY_LEN);
+    bool removed_password =
+        remove_key(BM_CFG_PARTITION_USER, WIFI_PASS_KEY, WIFI_PASS_KEY_LEN);
+
+    if (!removed_ssid && !removed_password) {
+      // If cannot remove credentials, the device can get caught in a reset loop
+      bm_log_error("Could not remove SSID and password");
+      return;
+    }
+
+    // Flush all operations on filesystems
+    sync();
+    bm_log_info("Rebooting now with new user wifi credentials");
+    sleep(3);
+    save_config(BM_CFG_PARTITION_USER, true);
   }
-
-  return BmOK;
-}
-
-static BmErr wifi_ssid_cb(uint8_t *payload) {
-  bm_log_debug("Ticks in %s: %u", __func__, bm_get_tick_count());
-  return set_wifi_credential(CONTEXT.wifi_ssid, payload);
-}
-
-static BmErr wifi_password_cb(uint8_t *payload) {
-  bm_log_debug("Ticks in %s: %u", __func__, bm_get_tick_count());
-  return set_wifi_credential(CONTEXT.wifi_password, payload);
-}
-
-static void get_wifi_credentials(BmTimer timer = nullptr) {
-  (void)timer;
-
-  bm_log_debug("Ticks before bcmp config get in %s: %u", __func__,
-               bm_get_tick_count());
-  BmErr err = BmOK;
-  bcmp_config_get(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
-                  WIFI_SSID_KEY_LEN, WIFI_SSID_KEY, &err, wifi_ssid_cb);
-  bcmp_config_get(CONTEXT.mote_node_id, BM_CFG_PARTITION_USER,
-                  WIFI_PASS_KEY_LEN, WIFI_PASS_KEY, &err, wifi_password_cb);
 }
 
 static void start_wifi_credentials_timer(void) {
@@ -752,6 +698,9 @@ static void start_wifi_credentials_timer(void) {
   if (timer) {
     return;
   }
+  // Update string sizes to max
+  CONTEXT.wifi_ssid.resize(MAX_STR_LEN_BYTES);
+  CONTEXT.wifi_password.resize(MAX_STR_LEN_BYTES);
 
   // See if credentials are there to begin with
   get_wifi_credentials();
