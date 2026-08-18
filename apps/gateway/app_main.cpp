@@ -14,6 +14,7 @@ extern "C" {
 #include "gateway_device.h"
 #include "gateway_ipc.h"
 #include "runtime.h"
+#include "safe_cmd.h"
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstdio>
@@ -21,7 +22,6 @@ extern "C" {
 #include <cstring>
 #include <errno.h>
 #include <filesystem>
-#include <string>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
@@ -33,6 +33,12 @@ using namespace std::filesystem;
 
 #define WIFI_ENABLED_KEY "wifi_enabled"
 #define WIFI_ENABLED_KEY_LEN (sizeof(WIFI_ENABLED_KEY) - 1)
+
+#define WIFI_SSID_KEY "wifi_ssid"
+#define WIFI_SSID_KEY_LEN (sizeof(WIFI_SSID_KEY) - 1)
+
+#define WIFI_PASS_KEY "wifi_password"
+#define WIFI_PASS_KEY_LEN (sizeof(WIFI_PASS_KEY) - 1)
 
 #define INIT_LOG_PATH "/var/run/bristlemouth_init_log.txt"
 #define BACKUP_INIT_LOG_PATH "/etc/bm_sbc/gateway/bristlemouth_init_log.txt.bak"
@@ -57,6 +63,8 @@ static struct {
   std::atomic<bool> system_time_synced = false;
   time_t last_rmc_time = 0;
   uint32_t wifi_enabled = 1;
+  std::string wifi_ssid;
+  std::string wifi_password;
 } CONTEXT;
 
 static void neighbor_cb(BcmpNeighbor *neighbor) {
@@ -107,7 +115,9 @@ static void register_sbc_undo(const char *cmd) {
   if (strncmp(p, "exec ", 5) == 0) {
     p += 5;
   }
-  while (*p == ' ') { ++p; } // skip any extra spaces
+  while (*p == ' ') {
+    ++p;
+  } // skip any extra spaces
 
   if (strncmp(p, "systemctl start ", 16) == 0) {
     snprintf(s_sbc_undo_command, sizeof(s_sbc_undo_command),
@@ -582,6 +592,132 @@ static void get_wifi_enable(void) {
   }
 }
 
+static const std::string connection_name = "user-wifi";
+
+static bool copy_connections(void) {
+  static const path connection_location =
+      "/etc/NetworkManager/system-connections/";
+  static const path backup_location = "/etc/wifi_backup";
+  std::error_code ec;
+
+  if (!is_directory(backup_location)) {
+    create_directory(backup_location, ec);
+    if (ec) {
+      bm_log_error("Could not create backup directory, err: %s",
+                   ec.message().c_str());
+      return false;
+    }
+    permissions(backup_location, perms::owner_all, ec);
+    if (ec) {
+      bm_log_error("Could not update backup location permissions, err: %s",
+                   ec.message().c_str());
+      return false;
+    }
+  }
+
+  bool ret = false;
+
+  for (const auto &e : directory_iterator(connection_location)) {
+    if (e.path().filename().string().rfind(connection_name, 0) == 0 &&
+        e.path().extension() == ".nmconnection") {
+      copy_file(e, backup_location / e.path().filename(),
+                copy_options::overwrite_existing, ec);
+      if (ec) {
+        ret = false;
+        bm_log_error("Could not copy backup connection, err: %s",
+                     ec.message().c_str());
+        break;
+      }
+      ret = true;
+    }
+  }
+
+  return ret;
+}
+
+static void get_wifi_credentials(BmTimer timer = nullptr) {
+  (void)timer;
+
+  bm_log_debug("Ticks before bcmp config get in %s: %u", __func__,
+               bm_get_tick_count());
+  size_t ssid_size = CONTEXT.wifi_ssid.size();
+  bool has_ssid =
+      get_config_string(BM_CFG_PARTITION_USER, WIFI_SSID_KEY, WIFI_SSID_KEY_LEN,
+                        CONTEXT.wifi_ssid.data(), &ssid_size);
+  size_t password_size = CONTEXT.wifi_password.size();
+  bool has_password =
+      get_config_string(BM_CFG_PARTITION_USER, WIFI_PASS_KEY, WIFI_PASS_KEY_LEN,
+                        CONTEXT.wifi_password.data(), &password_size);
+
+  // If both SSID and password are available create a new network manager
+  // connection
+  if (has_ssid && has_password) {
+    CONTEXT.wifi_ssid.resize(ssid_size);
+    CONTEXT.wifi_password.resize(password_size);
+
+    bm_log_info("Saving wifi credentials...");
+
+    // Remove any existing wifi credentials and then add the new one
+    std::string cmd = "nmcli connection delete " + connection_name;
+    safe_cmd(cmd.c_str());
+    cmd = "nmcli connection add type wifi ifname wlan0 con-name " +
+          connection_name + " ssid " + CONTEXT.wifi_ssid +
+          " wifi-sec.key-mgmt wpa-psk wifi-sec.psk " + CONTEXT.wifi_password;
+    int ret = safe_cmd(cmd.c_str());
+    if (ret != 0) {
+      bm_log_error("Could not save wifi credentials, err: %d", ret);
+      return;
+    }
+
+    if (!copy_connections()) {
+      bm_log_error("Could not copy wifi credentials...");
+      return;
+    }
+
+    // Delete keys on mote now and reboot
+    bool removed_ssid =
+        remove_key(BM_CFG_PARTITION_USER, WIFI_SSID_KEY, WIFI_SSID_KEY_LEN);
+    bool removed_password =
+        remove_key(BM_CFG_PARTITION_USER, WIFI_PASS_KEY, WIFI_PASS_KEY_LEN);
+
+    if (!removed_ssid && !removed_password) {
+      // If cannot remove credentials, the device can get caught in a reset loop
+      bm_log_error("Could not remove SSID and password");
+      return;
+    }
+
+    // Flush all operations on filesystems
+    sync();
+    bm_log_info("Rebooting now with new user wifi credentials");
+    sleep(3);
+    save_config(BM_CFG_PARTITION_USER, true);
+  }
+}
+
+static void start_wifi_credentials_timer(void) {
+  static BmTimer timer = nullptr;
+
+  if (timer) {
+    return;
+  }
+  // Update string sizes to max
+  CONTEXT.wifi_ssid.resize(MAX_STR_LEN_BYTES);
+  CONTEXT.wifi_password.resize(MAX_STR_LEN_BYTES);
+
+  // See if credentials are there to begin with
+  get_wifi_credentials();
+
+  // Check for credentials every timer_ms
+  static constexpr uint32_t timer_ms = 10000;
+  static constexpr uint32_t timer_wait_ms = 10;
+  timer = bm_timer_create("creds", timer_ms, true, NULL, get_wifi_credentials);
+  if (!timer) {
+    return;
+  }
+
+  bm_timer_start(timer, timer_wait_ms);
+}
+
 #define MAX_NMEA_RMC_LEN 82
 #define MAX_NMEA_FIELDS 14
 
@@ -838,6 +974,7 @@ void setup(void) {
   get_mote_system_configs();
   get_sbc_command();
   get_wifi_enable();
+  start_wifi_credentials_timer();
   gateway_ipc_init(CONTEXT.mote_node_id);
 }
 
