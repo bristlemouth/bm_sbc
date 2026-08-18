@@ -181,7 +181,12 @@ bool bm_config_write(BmConfigPartition partition, uint32_t offset,
   return true;
 }
 
-void bm_config_reset(void) {}
+void bm_config_reset(void) {
+  int rc = system("systemctl reboot");
+  if (rc != 0) {
+    bm_log_error("systemctl reboot returned %d", rc);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // RTC — backed by CLOCK_REALTIME

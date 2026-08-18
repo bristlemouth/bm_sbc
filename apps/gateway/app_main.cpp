@@ -652,6 +652,8 @@ static void get_wifi_credentials(BmTimer timer = nullptr) {
   // If both SSID and password are available create a new network manager
   // connection
   if (has_ssid && has_password) {
+    CONTEXT.wifi_ssid.resize(ssid_size);
+    CONTEXT.wifi_password.resize(password_size);
 
     bm_log_info("Saving wifi credentials...");
 
