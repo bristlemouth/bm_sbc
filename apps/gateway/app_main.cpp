@@ -28,9 +28,6 @@ extern "C" {
 
 using namespace std::filesystem;
 
-#define SBC_COMMAND_KEY "sbc_command"
-#define SBC_COMMAND_KEY_LEN (sizeof(SBC_COMMAND_KEY) - 1)
-
 #define WIFI_ENABLED_KEY "wifi_enabled"
 #define WIFI_ENABLED_KEY_LEN (sizeof(WIFI_ENABLED_KEY) - 1)
 
@@ -148,42 +145,6 @@ static void run_sbc_command(void) {
   }
 }
 
-static BmErr sbc_command_reply_cb(uint8_t *payload) {
-  BmErr err = BmENODATA;
-  if (payload) {
-    BmConfigValue *msg = reinterpret_cast<BmConfigValue *>(payload);
-    static char sbc_command[1024];
-    size_t sbc_command_len = sizeof(sbc_command);
-    memset(sbc_command, 0, sbc_command_len);
-    err = bcmp_config_decode_value(STR, msg->data, msg->data_length,
-                                   sbc_command, &sbc_command_len);
-    if (err == BmOK) {
-      if (sbc_command_len > 0) {
-        bm_log_info("Received sbc command: %.*s", (int)sbc_command_len,
-                    sbc_command);
-        CONTEXT.sbc_command_received = true;
-        memcpy(CONTEXT.sbc_command, sbc_command, sbc_command_len);
-        // Will run the sbc command if the time is synced
-        run_sbc_command();
-      }
-    } else {
-      bm_log_error("Failed to decode sbc command bcmp value, err=%d", err);
-    }
-  }
-
-  return err;
-}
-
-static void send_sbc_command_request(void) {
-  BmErr err = BmOK;
-  bool sent = bcmp_config_get(CONTEXT.mote_node_id, BM_CFG_PARTITION_SYSTEM,
-                              SBC_COMMAND_KEY_LEN, SBC_COMMAND_KEY, &err,
-                              sbc_command_reply_cb);
-  if (!sent) {
-    bm_log_warn("Failed to send bcmp config get for sbc_command, err=%d", err);
-  }
-}
-
 static void wait_for_config_reply(std::atomic<bool> *received) {
   uint32_t total_awaited_ms = 0;
   const uint32_t timeout_ms = 500;
@@ -195,12 +156,39 @@ static void wait_for_config_reply(std::atomic<bool> *received) {
 }
 
 static void get_sbc_command(void) {
-  int8_t retries_remaining = 3;
-  while (!CONTEXT.sbc_command_received && retries_remaining > 0) {
-    send_sbc_command_request();
-    wait_for_config_reply(&CONTEXT.sbc_command_received);
-    retries_remaining--;
+  FILE *fp = fopen(INIT_LOG_PATH, "r");
+  int found = 0;
+
+  static_assert(sizeof(CONTEXT.sbc_command) == 50);
+  if (fp == NULL) {
+    bm_log_error("Could not read Bristlemouth configuration file");
+  } else {
+    size_t len = 0;
+    char *line = NULL;
+
+    while (getline(&line, &len, fp) != -1) {
+      found = sscanf(line, "sbc_command: %49[^\r\n]", CONTEXT.sbc_command);
+      if (found == 1) {
+        bm_log_info("Received sbc command: %s", CONTEXT.sbc_command);
+        break;
+      }
+    }
+
+    free(line);
+    fclose(fp);
   }
+
+  if (found != 1) {
+    static const char *default_command = "/usr/local/bin/borealis_default.sh";
+    bm_log_error(
+        "Could not obtain sbc_command parameter, invoking default command %s",
+        default_command);
+    strncpy(CONTEXT.sbc_command, default_command, sizeof(CONTEXT.sbc_command));
+  }
+
+  CONTEXT.sbc_command_received = true;
+  // Will run the sbc command if the time is synced
+  run_sbc_command();
 }
 
 /**************** CBOR config map ****************/
