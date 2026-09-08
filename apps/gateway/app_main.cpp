@@ -557,38 +557,26 @@ static void get_wifi_enable(void) {
     retries_remaining--;
   }
 
-  std::string network_manager_service_action = "enable";
-  std::string wifi_enable_action = "unblock";
-  std::string wifi_driver_action = "";
-  std::string wifi_driver_dependency_command = "";
+  const bool overlay_present =
+      system("grep -qxF 'dtoverlay=disable-wifi' /boot/firmware/config.txt") ==
+      0;
+  bool changed = false;
 
-  if (!CONTEXT.wifi_enabled) {
-    network_manager_service_action = "disable";
-    wifi_enable_action = "block";
-    wifi_driver_action = "-r ";
-    wifi_driver_dependency_command = " modprobe -r brcmutil";
+  if (!CONTEXT.wifi_enabled && !overlay_present) {
+    changed = system("printf '\\ndtoverlay=disable-wifi\\n' "
+                     ">> /boot/firmware/config.txt") == 0;
+    bm_log_info("Disabling wifi via config.txt overlay");
+  } else if (CONTEXT.wifi_enabled && overlay_present) {
+    changed = system("sed -i '/^dtoverlay=disable-wifi\\r\\?$/d' "
+                     "/boot/firmware/config.txt") == 0;
+    bm_log_info("Enabling wifi removed config.txt overlay");
   }
 
-  // Configure Wi-Fi In Software
-  std::string wifi_command = "rfkill " + wifi_enable_action + " wifi";
-  bm_log_info("Invoking command for Wi-Fi radio: %s", wifi_command.c_str());
-  system(wifi_command.c_str());
-
-  // Configure NetworkManager.service
-  std::string systemctl_action =
-      "systemctl " + network_manager_service_action + " --now NetworkManager";
-  bm_log_info("Invoking systemctl command: %s", systemctl_action.c_str());
-  system(systemctl_action.c_str());
-
-  // Configure Wi-Fi Hardware
-  std::string wifi_driver_command =
-      "modprobe " + wifi_driver_action + "brcmfmac";
-  bm_log_info("Invoking driver command: %s", wifi_driver_command.c_str());
-  system(wifi_driver_command.c_str());
-  if (wifi_driver_dependency_command.length()) {
-    bm_log_info("Invoking driver dependency command: %s",
-                wifi_driver_dependency_command.c_str());
-    system(wifi_driver_dependency_command.c_str());
+  if (changed) {
+    bm_log_info("Rebooting to apply new Wi-Fi configuration");
+    sync();
+    sleep(3);
+    system("systemctl reboot");
   }
 }
 
