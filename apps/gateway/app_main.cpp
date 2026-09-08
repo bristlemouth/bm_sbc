@@ -159,6 +159,7 @@ static void get_sbc_command(void) {
   FILE *fp = fopen(INIT_LOG_PATH, "r");
   int found = 0;
 
+  static_assert(sizeof(CONTEXT.sbc_command) == 50);
   if (fp == NULL) {
     bm_log_error("Could not read Bristlemouth configuration file");
   } else {
