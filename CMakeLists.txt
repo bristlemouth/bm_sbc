@@ -76,7 +76,6 @@ add_library(bm_sbc_core STATIC
   src/core/app_runner.cpp
   src/core/pcap_file_sink.cpp
   src/core/safe_cmd.cpp
-  src/core/hostname_service.c
   src/platform/linux/platform_linux.cpp
   src/net/virtual_port_device.cpp
   src/net/gateway_device.cpp

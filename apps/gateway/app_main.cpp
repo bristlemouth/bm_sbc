@@ -13,7 +13,6 @@ extern "C" {
 #include "cbor.h"
 #include "gateway_device.h"
 #include "gateway_ipc.h"
-#include "hostname_service.h"
 #include "runtime.h"
 #include "safe_cmd.h"
 #include <arpa/inet.h>
@@ -946,7 +945,6 @@ void setup(void) {
   }
   bm_sub("gps-nmea/rmc", gprmc_callback);
   bm_sub("spotter/utc-time", utc_callback);
-  hostname_service_register();
   await_uart_neighbor();
   get_mote_app_name();
   get_mote_system_configs();

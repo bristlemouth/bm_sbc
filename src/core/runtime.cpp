@@ -497,10 +497,9 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
     \tVendor ID: %" PRIu32 "\n \
     \tProduct ID: %" PRIu32 "\n \
     \tHW Version: %" PRIu32 " ",
-    app_name, dev_cfg.device_name, dev_cfg.node_id, dev_cfg.git_sha,
-    dev_cfg.version_string, dev_cfg.vendor_id, dev_cfg.product_id,
-    dev_cfg.hw_ver);
-
+              app_name, dev_cfg.device_name, dev_cfg.node_id, dev_cfg.git_sha,
+              dev_cfg.version_string, dev_cfg.vendor_id, dev_cfg.product_id,
+              dev_cfg.hw_ver);
 
   // --- VirtualPortDevice setup ------------------------------------------
   NetworkDevice vpd_dev = virtual_port_device_get(&vpc);
@@ -536,7 +535,8 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   bm_err_check(err, timer_callback_handler_init());
   bm_err_check(err, bm_ip_init());
   // Restore client_update_reboot_info from the DFU marker file (if present)
-  // so bm_dfu_init() inside bcmp_init() sees DFU_REBOOT_MAGIC on post-swap boot.
+  // so bm_dfu_init() inside bcmp_init() sees DFU_REBOOT_MAGIC on post-swap
+  // boot.
   platform_linux_dfu_restore_state();
   bm_err_check(err, bcmp_init(net_dev));
   uint8_t total_ports = net_dev.trait->num_ports();
@@ -549,6 +549,20 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   sys_info_service_init();
   config_cbor_map_service_init();
 
+  static constexpr char hostname_key[] = "hostname";
+  char hostname[MAX_STR_LEN_BYTES];
+  size_t hostname_len = sizeof(hostname);
+  if (!get_config_string(BM_CFG_PARTITION_USER, hostname_key,
+                         strlen(hostname_key), hostname, &hostname_len)) {
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+      bm_log_info("Hostname is %s", hostname);
+      set_config_string(BM_CFG_PARTITION_USER, hostname_key,
+                        strlen(hostname_key), hostname, strlen(hostname));
+    } else {
+      bm_log_error("Failed to get hostname!");
+    }
+  }
+
   if (err != BmOK) {
     bm_log_error("startup sequence failed err=%d", (int)err);
     return (int)err;
@@ -558,9 +572,9 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
 }
 
 void bm_sbc_runtime_set_pre_exec_cb(void (*cb)(void)) {
-    platform_linux_set_pre_exec_cb(cb);
+  platform_linux_set_pre_exec_cb(cb);
 }
 
-void bm_sbc_runtime_set_argv(int argc, char **argv){
+void bm_sbc_runtime_set_argv(int argc, char **argv) {
   platform_linux_set_argv(argc, argv);
 }
