@@ -488,6 +488,20 @@ int bm_sbc_runtime_init(int argc, char **argv, const char *app_name) {
   dev_cfg.ver_patch = BM_SBC_VERSION_PATCH;
   device_init(dev_cfg);
 
+  bm_log_info("Device info:\n \
+    \tApp Name: %s\n \
+    \tDevice name: %s\n \
+    \tNode ID: %" PRIx64 "\n \
+    \tGit SHA: %" PRIx32 "\n \
+    \tVersion STR: %s\n \
+    \tVendor ID: %" PRIu32 "\n \
+    \tProduct ID: %" PRIu32 "\n \
+    \tHW Version: %" PRIu32 " ",
+    app_name, dev_cfg.device_name, dev_cfg.node_id, dev_cfg.git_sha,
+    dev_cfg.version_string, dev_cfg.vendor_id, dev_cfg.product_id,
+    dev_cfg.hw_ver);
+
+
   // --- VirtualPortDevice setup ------------------------------------------
   NetworkDevice vpd_dev = virtual_port_device_get(&vpc);
   NetworkDevice net_dev;
