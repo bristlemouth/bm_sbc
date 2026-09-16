@@ -1,10 +1,13 @@
 #include "uart_l2_transport.h"
 #include "bm_log.h"
+#include "bm_os.h"
 #include "cobs.h"
 #include "frame_codec.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -34,6 +37,16 @@ static bool s_rx_running = false;
 static uart_l2_rx_cb s_rx_cb = nullptr;
 static void *s_rx_ctx = nullptr;
 static pthread_mutex_t s_tx_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Kept so the RX thread can reopen the port after a hangup.
+static char s_dev_path[PATH_MAX] = {0};
+static int s_baud = 0;
+
+/// Delay between reopen attempts after a hangup.
+#define UART_L2_REOPEN_DELAY_MS 100
+
+/// How long poll() waits before re-checking s_rx_running.
+#define UART_L2_POLL_TIMEOUT_MS 200
 
 // ---------------------------------------------------------------------------
 // Serial port helpers
@@ -74,7 +87,9 @@ static int serial_open(const char *path, int baud) {
     return -1;
   }
 
-  int fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK);
+  // O_CLOEXEC: don't leak the port into forked children (safe_cmd, system()).
+  // A child holding this fd can read our bytes or reconfigure the line.
+  int fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
   if (fd < 0) {
     bm_log_error("uart_l2: open(%s) failed: %s", path, strerror(errno));
     return -1;
@@ -103,6 +118,11 @@ static int serial_open(const char *path, int baud) {
 
   // No hardware flow control.
   tty.c_cflag &= ~CRTSCTS;
+
+  // HUPCL drops DTR/RTS when the last fd on this tty closes. cfmakeraw
+  // leaves it set; clear it so no other process's close() can toggle our
+  // hardware lines.
+  tty.c_cflag &= ~HUPCL;
 
   // Enable receiver, ignore modem status lines.
   tty.c_cflag |= (CLOCAL | CREAD);
@@ -144,9 +164,54 @@ static void *rx_thread_func(void *arg) {
   size_t decode_error_count = 0;
 
   while (s_rx_running) {
+    // Poll before reading so the thread wakes up regularly and notices
+    // s_rx_running going false — closing the fd does NOT reliably unblock a
+    // thread already parked in read(), which used to hang deinit forever.
+    struct pollfd pfd = {s_fd, POLLIN, 0};
+    int pr = poll(&pfd, 1, UART_L2_POLL_TIMEOUT_MS);
+    if (pr < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      bm_log_error("uart_l2: poll error: %s", strerror(errno));
+      break;
+    }
+    if (pr == 0) {
+      continue; // idle
+    }
+
     ssize_t n = read(s_fd, read_buf, sizeof(read_buf));
-    if (n <= 0) {
-      if (n == 0 || errno == EAGAIN || errno == EINTR) {
+    // On hangup poll() keeps returning POLLHUP and read() returns 0 once the
+    // buffer drains, so testing n == 0 catches it without dropping the last
+    // frame that arrived before the hangup.
+    if (n == 0) {
+      // Hangup, not "no data yet" — every subsequent read() returns 0 too,
+      // so retrying here spins forever and the link never comes back.
+      bm_log_warn("uart_l2: hangup on %s, reopening", s_dev_path);
+      pthread_mutex_lock(&s_tx_mutex);
+      close(s_fd);
+      s_fd = -1;
+      pthread_mutex_unlock(&s_tx_mutex);
+
+      accum_len = 0; // whatever we had is half a frame now
+
+      while (s_rx_running) {
+        bm_delay(UART_L2_REOPEN_DELAY_MS);
+        int fd = serial_open(s_dev_path, s_baud);
+        if (fd >= 0) {
+          pthread_mutex_lock(&s_tx_mutex);
+          s_fd = fd;
+          pthread_mutex_unlock(&s_tx_mutex);
+          bm_log_info("uart_l2: reopened %s", s_dev_path);
+          break;
+        }
+        // ponytail: fixed retry interval, no backoff. serial_open already
+        // logs the failure; add backoff if the logs get noisy.
+      }
+      continue;
+    }
+    if (n < 0) {
+      if (errno == EAGAIN || errno == EINTR) {
         continue;
       }
       // Fatal read error — stop.
@@ -163,7 +228,8 @@ static void *rx_thread_func(void *arg) {
           if (l2_len > 0) {
             s_rx_cb(l2_frame, l2_len, s_rx_ctx);
           } else {
-            bm_log_error("uart_l2: decode error, count - %d", ++decode_error_count);
+            bm_log_error("uart_l2: decode error, count - %zu",
+                         ++decode_error_count);
           }
           // else: CRC/length error — silently drop
         }
@@ -192,6 +258,10 @@ int uart_l2_transport_init(const char *device_path, int baud_rate,
     bm_log_warn("uart_l2: already initialized");
     return -1;
   }
+
+  // Stash these so the RX thread can reopen the port after a hangup.
+  snprintf(s_dev_path, sizeof(s_dev_path), "%s", device_path);
+  s_baud = baud_rate;
 
   s_fd = serial_open(device_path, baud_rate);
   if (s_fd < 0) {
@@ -226,6 +296,11 @@ int uart_l2_send(const uint8_t *l2_frame, size_t l2_len) {
 
   // Write the full wire frame atomically (serialized by mutex).
   pthread_mutex_lock(&s_tx_mutex);
+  if (s_fd < 0) {
+    // Port is mid-reopen after a hangup; drop quietly rather than log per TX.
+    pthread_mutex_unlock(&s_tx_mutex);
+    return -1;
+  }
   const uint8_t *p = wire;
   size_t remaining = wire_len;
   int result = 0;
@@ -248,14 +323,20 @@ int uart_l2_send(const uint8_t *l2_frame, size_t l2_len) {
 }
 
 void uart_l2_transport_deinit(void) {
-  if (s_fd < 0) {
+  if (!s_rx_running) {
     return;
   }
 
+  // Clear this first: it also breaks the RX thread out of a reopen retry.
   s_rx_running = false;
-  // The RX thread is blocked on read() — closing the fd will unblock it.
-  close(s_fd);
-  s_fd = -1;
+
+  // The RX thread polls with a timeout, so it exits within one poll period.
+  pthread_mutex_lock(&s_tx_mutex);
+  if (s_fd >= 0) {
+    close(s_fd);
+    s_fd = -1;
+  }
+  pthread_mutex_unlock(&s_tx_mutex);
 
   pthread_join(s_rx_thread, nullptr);
 
