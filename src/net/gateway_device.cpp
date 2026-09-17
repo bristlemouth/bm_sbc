@@ -1,9 +1,9 @@
 #include "gateway_device.h"
 #include "bm_log.h"
+#include "l2.h"
 #include "messages/neighbors.h"
 #include "uart_l2_transport.h"
 #include "virtual_port_device.h"
-#include "l2.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -141,8 +141,15 @@ static void gw_neighbor_discovery_cb(bool up, BcmpNeighbor *neighbor) {
     return;
   }
   bm_log_info("UART link %s (port %u)", up ? "up" : "down", neighbor->port);
-  if (s_gw.vpd.callbacks && s_gw.vpd.callbacks->link_change) {
-    s_gw.vpd.callbacks->link_change(neighbor->port - 1, up);
+
+  // TODO: determine how to ensure RX packects are not dropped on UART link
+  // under heavy CPU load.
+  if (!up) {
+    bm_log_warn("Keeping port: %u online...", neighbor->port);
+  }
+  if (up && s_gw.vpd.callbacks && s_gw.vpd.callbacks->link_change) {
+    // Never disable port as it is a UART stream
+    s_gw.vpd.callbacks->link_change(neighbor->port - 1, true);
   }
 }
 
