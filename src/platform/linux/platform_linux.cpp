@@ -577,7 +577,6 @@ BmErr bm_dfu_client_set_confirmed(void) {
 
 void bm_dfu_reset(bool reply_received) {
   (void)reply_received;
-  unlink(s_marker_path);
   bm_log_info("dfu fail_update: restarting via execv");
   if (s_pre_exec_cb) { s_pre_exec_cb(); }
   bm_log_shutdown();
@@ -606,6 +605,7 @@ BmErr bm_dfu_client_fail_update_and_reset(void) {
   }
 
   // Reset only when reply is received to our critical option or timeout
+  unlink(s_marker_path);
   sbc_critical_op(false, bm_dfu_reset);
 
   return BmOK;
